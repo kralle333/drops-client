@@ -4,6 +4,8 @@ on:
 
 jobs:
   release:
+    env:
+      TOOLCHAIN_VERSION: 1.82
     name: release ${{ matrix.target }}
     runs-on: ubuntu-latest
     strategy:
