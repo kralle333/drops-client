@@ -1,12 +1,11 @@
 use crate::client_config::ClientConfig;
-use crate::default_platform;
-use crate::errors::DownloadGameError::IoError;
-use crate::errors::LoginError::{APIError, BadCredentials};
-use crate::errors::{DownloadGameError, FetchGamesError, LoginError};
+use crate::errors::LoginError::{APIError, BadCredentials, MissingSessionToken};
+use crate::errors::{FetchGamesError, LoginError};
+use crate::{default_platform, SessionToken};
 use drops_messages::requests::{GetGamesRequest, GetGamesResponse};
-use futures_util::StreamExt;
-use log::error;
-use reqwest::{Client, StatusCode};
+use reqwest::redirect::Policy;
+use reqwest::{Client, ClientBuilder, StatusCode};
+use std::error;
 use std::fs;
 use std::fs::File;
 use std::io::Cursor;
@@ -18,57 +17,72 @@ use zip::ZipArchive;
 pub struct InstalledRelease {
     pub game_name_id: String,
     pub version: String,
-    pub channel: String,
+    pub channel_name: String,
+}
+
+pub(crate) fn build_client() -> Client {
+    ClientBuilder::new()
+        .redirect(Policy::none())
+        .build()
+        .unwrap()
 }
 
 pub async fn login(
-    client: Client,
     config: ClientConfig,
     username: String,
     password: String,
-) -> Result<Client, LoginError> {
+) -> Result<SessionToken, LoginError> {
+    let client = build_client();
     let resp = client
-        .post(format!("{}/login", config.drops_url))
+        .post(format!("{}/login", config.get_drops_url()))
         .timeout(Duration::from_secs(5))
         .basic_auth(username, Some(password))
         .send()
         .await?;
 
+    println!("{:?}", resp.headers());
+
     match resp.status() {
-        StatusCode::OK => Ok(client),
+        StatusCode::OK => {
+            let cookie = match resp.headers().get("set-cookie") {
+                Some(session) if session.to_str().is_ok() => session.to_str().unwrap(),
+                None | Some(_) => return Err(MissingSessionToken),
+            };
+            Ok(SessionToken::parse(cookie))
+        }
         StatusCode::UNAUTHORIZED => Err(BadCredentials),
         _ => Err(APIError),
     }
 }
 
-pub async fn fetch_games(
-    mut config: ClientConfig,
-    client: Client,
-) -> Result<ClientConfig, FetchGamesError> {
+pub async fn fetch_games(config: ClientConfig) -> Result<GetGamesResponse, FetchGamesError> {
     let req = GetGamesRequest {
         platform: Some(default_platform().into()),
     };
 
-    let resp: GetGamesResponse = client
-        .get(format!("{}/games", config.drops_url))
-        .timeout(Duration::from_secs(5))
+    let client = build_client();
+    let url = format!("{}/games", config.get_drops_url());
+    let resp = client
+        .get(url)
         .json(&req)
+        .header("Cookie", config.get_session_token())
+        .timeout(Duration::from_secs(5))
         .send()
-        .await?
-        .json()
         .await?;
 
-    config
-        .sync_and_save(resp)
-        .map_err(|_| FetchGamesError::ConfigSavingFailed)?;
+    if resp.status().is_redirection() {
+        return Err(FetchGamesError::NeedRelogin);
+    }
 
-    Ok(config)
+    let resp: GetGamesResponse = resp.json().await?;
+
+    Ok(resp)
 }
 
 pub fn unzip_file(
     archive: &mut ZipArchive<Cursor<Vec<u8>>>,
     output_dir: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn error::Error>> {
     // Iterate through the zip entries
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
@@ -103,56 +117,7 @@ pub fn unzip_file(
 
     Ok(())
 }
-pub async fn download_game(
-    client: Client,
-    config: ClientConfig,
-    game_name_id: String,
-    version: String,
-    channel: String,
-) -> Result<InstalledRelease, DownloadGameError> {
-    let response = client
-        .get(format!(
-            "{}/releases/{}/{}/{}/{}",
-            config.drops_url,
-            game_name_id,
-            default_platform(),
-            channel,
-            version
-        ))
-        .send()
-        .await?;
-
-    let stream = response.bytes_stream();
-    let mut zip_data = Vec::new();
-    tokio::pin!(stream); // Pin the stream for iteration
-    while let Some(chunk) = stream.next().await {
-        zip_data.extend_from_slice(&chunk?);
-    }
-
-    let reader = Cursor::new(zip_data);
-    let mut zip = ZipArchive::new(reader).map_err(|_| IoError)?;
-
-    let output_dir = Path::new(&config.games_dir)
-        .join(&game_name_id)
-        .join(&channel)
-        .join(&version);
-    fs::create_dir_all(&output_dir).expect("failed creating unzip folder");
-    unzip_file(&mut zip, output_dir.as_path().to_str().unwrap()).map_err(|e| {
-        error!("Failed to unzip file: {}", e);
-        IoError
-    })?;
-
-    Ok(InstalledRelease {
-        game_name_id,
-        version,
-        channel,
-    })
-}
 
 pub async fn can_reach_host(url: String) -> bool {
-    let client = Client::new();
-    match client.get(url).timeout(Duration::from_secs(5)).send().await {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    build_client().get(url).send().await.is_ok()
 }

@@ -1,0 +1,29 @@
+[package]
+name = "drops-client"
+authors = ["Kristian Pilegaard Jensen <kralle@gmail.com>"]
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+iced = { version = "0.13.1", features = ["system", "tokio"] }
+iced_futures = { version = "0.13.2" }
+secrecy = "0.10.3"
+reqwest = { version = "0.12.8", features = ["stream", "cookies", "json"] }
+anyhow = "1.0.89"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"
+directories = "5.0.1"
+rfd = "0.15.0"
+time = "0.3.36"
+tokio = "1.40.0"
+drops-messages = "0.1.13"
+uuid = { version = "1.11.0", features = ["v4", "serde"] }
+chrono = "0.4.38"
+log = "0.4.22"
+env_logger = "0.11.5"
+futures-util = "0.3.31"
+zip = "2.2.0"
+tmpdir = "1.0.0"
+shellexpand = "3.1.0"
+opener = "0.7.2"
+strum = "0.26.3"
