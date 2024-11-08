@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 mod api;
 mod client_config;
 mod downloading;
@@ -318,7 +319,7 @@ impl DropsClient {
                             self.config.as_ref().unwrap().get_username()
                         )),
                         horizontal_space(),
-                        "💧💧💧",
+                        "drops",
                         horizontal_space(),
                         button(text("logout").center()).on_press(Message::Logout)
                     ]
@@ -336,11 +337,19 @@ impl DropsClient {
                 }))
                 .into();
 
-                let sidebar_column =
-                    column![text("Games").align_x(Center), games, vertical_space()]
-                        .spacing(40)
-                        .padding(10)
-                        .width(160);
+                let sidebar_column = column![
+                    row![
+                        horizontal_space(),
+                        text("Games").align_x(Center).size(22),
+                        horizontal_space()
+                    ],
+                    vertical_space().height(5),
+                    games,
+                    vertical_space()
+                ]
+                .spacing(10)
+                .padding(10)
+                .width(160);
 
                 let sidebar = container(sidebar_column)
                     .style(container::dark)
@@ -469,10 +478,14 @@ impl DropsClient {
             .spacing(10)
             .width(200);
 
+        let mut versions: Vec<String> = versions.into_iter().map(|x| x).collect();
+        versions.sort();
+
         let versions = versions
             .into_iter()
             .fold(column![], |c, version| c.push(text(version).size(16)))
             .spacing(10);
+
         column![
             text(game.name.to_string()).size(32),
             vertical_space().height(3),
