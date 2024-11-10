@@ -1,0 +1,19 @@
+name: Build Project and Create Release
+
+on:
+  workflow_dispatch:
+jobs:
+  build-upload:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - run: cargo build --release
+      - run: |
+          mkdir drops-bin
+          mv target/release/drops-client drops-bin
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: builds
+          path: ${{ github.workspace }}/drops-bin/
