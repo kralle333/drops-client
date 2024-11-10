@@ -19,7 +19,7 @@ pub enum Message {
     PasswordChanged(String),
     DropsUrlChanged(String),
     TestDropsUrl,
-    WizardCanReachHostChecked(bool),
+    WizardCanReachHostChecked(Result<(), String>),
     ChannelChanged(String),
     ServerChanged(String),
     FinishWizard,

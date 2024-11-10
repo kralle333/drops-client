@@ -8,8 +8,8 @@ mod messages;
 use crate::api::{can_reach_host, fetch_games, login};
 use crate::client_config::ReleaseState::Installed;
 use crate::client_config::{ClientConfig, DropsAccountConfig, Game};
-use crate::downloading::{Download, DownloadProgress, DownloadState};
-use crate::errors::{FetchGamesError, LoginError};
+use crate::downloading::{Download, DownloadError, DownloadProgress, DownloadState};
+use crate::errors::{ConfigError, FetchGamesError, LoginError};
 use crate::messages::Message;
 use env_logger::Env;
 use iced::widget::{
@@ -23,7 +23,6 @@ use rfd::FileDialog;
 use secrecy::{ExposeSecret, SecretString};
 use std::collections::HashSet;
 use std::default::Default;
-use std::future::Future;
 use std::path::PathBuf;
 use std::process::Command;
 use uuid::Uuid;
@@ -52,6 +51,7 @@ struct LoginInput {
 struct WizardInput {
     has_valid_games_dir: bool,
     has_valid_host: bool,
+    host_error: String,
     drops_url_input: String,
     games_dir_input: String,
 }
@@ -154,31 +154,30 @@ impl DropsClient {
             .collect::<Vec<String>>();
 
         let active_one = config.get_active_account();
-        let default = match active_one {
-            None => None,
-            Some(account) => Some(
-                config
-                    .accounts
-                    .iter()
-                    .find(|x| x.id == account.id)
-                    .unwrap()
-                    .url
-                    .to_string(),
-            ),
-        };
+        let default = active_one.map(|account| {
+            config
+                .accounts
+                .iter()
+                .find(|x| x.id == account.id)
+                .unwrap()
+                .url
+                .to_string()
+        });
 
-        let server_select = pick_list(options, default, Message::ServerChanged);
+        let server_select = pick_list(options, default, Message::ServerChanged).width(250);
 
         let username_input: TextInput<Message> = text_input("Username", &self.login.username_input)
             .on_input(Message::UsernameChanged)
             .padding(10)
-            .size(15);
+            .size(15)
+            .width(250);
         let password_input =
             iced::widget::text_input("Password", &self.login.password_input.expose_secret())
                 .on_input(Message::PasswordChanged)
                 .secure(true)
                 .padding(10)
-                .size(15);
+                .size(15)
+                .width(250);
 
         let login_button = iced::widget::button(text("login").center())
             .on_press(Message::Login)
@@ -190,7 +189,7 @@ impl DropsClient {
             .padding(5)
             .width(150);
 
-        column![]
+        let inputs = column![]
             .push_maybe(
                 self.login
                     .error_reason
@@ -200,6 +199,10 @@ impl DropsClient {
             .push(server_select)
             .push(username_input)
             .push(password_input)
+            .spacing(10);
+
+        column![]
+            .push(row![horizontal_space(), inputs, horizontal_space()])
             .spacing(10)
             .push(vertical_space().height(5))
             .push(row![horizontal_space(), login_button, horizontal_space()])
@@ -215,6 +218,7 @@ impl DropsClient {
     fn wizard_column(&self) -> Column<Message> {
         let host_input: TextInput<Message> =
             text_input("drops server url", &self.wizard.drops_url_input)
+                .width(200)
                 .on_input(Message::DropsUrlChanged)
                 .padding(10)
                 .size(15);
@@ -223,6 +227,11 @@ impl DropsClient {
         let button_height = 40;
         let can_test = !self.is_checking_host_reachable && !self.wizard.drops_url_input.is_empty();
         let button_work = can_test.then_some(true);
+
+        let host_err_text = match self.wizard.has_valid_host {
+            true => text("ok").color(Color::from_rgb(0.4, 0.7, 0.4)),
+            false => text(self.wizard.host_error.to_string()).color(Color::from_rgb(0.8, 0.4, 0.4)),
+        };
         let test_host_row = row![]
             .push(host_input)
             .push(
@@ -234,12 +243,17 @@ impl DropsClient {
             .spacing(20)
             .align_y(Center);
 
-        let file_row = text_input("select games dir", &self.wizard.games_dir_input)
+        let dir_select_input = text_input("select games dir", &self.wizard.games_dir_input)
+            .width(200)
             .padding(10)
             .size(15);
 
+        let ok_text = match self.wizard.has_valid_games_dir {
+            true => "ok",
+            false => "",
+        };
         let select_file_row = row![]
-            .push(file_row)
+            .push(dir_select_input)
             .push(
                 button(text("open").center())
                     .on_press(Message::SelectGamesDir)
@@ -270,12 +284,16 @@ impl DropsClient {
             .spacing(30)
             .align_y(Center);
         column![
+            host_err_text,
             test_host_row,
-            select_file_row,
             vertical_space().height(10),
+            text(ok_text).color(Color::from_rgb(0.4, 0.7, 0.4)),
+            select_file_row,
+            vertical_space().height(80),
             bottom_bar
         ]
-        .spacing(20)
+        .width(500)
+        .spacing(0)
     }
 
     pub fn view(&self) -> Element<Message> {
@@ -396,18 +414,25 @@ impl DropsClient {
                         ]
                         .align_x(Center)
                         .width(Fill),
-                        DownloadState::Errored(reason) => column![
-                            text(format!(
-                                "Failed to download release with error: {:?}",
-                                reason
-                            )),
-                            button(text("Ok").center())
-                                .on_press(Message::CloseDownloadError(game.name_id.to_string()))
-                        ]
-                        .spacing(40)
-                        .align_x(Center)
-                        .width(Fill)
-                        .into(),
+                        DownloadState::Errored(reason) => {
+                            let reason_str = match reason {
+                                DownloadError::RequestFailed(e) => format!("request error:  {}", e),
+                                DownloadError::IoError => "io error".to_string(),
+                            };
+                            column![
+                                text(format!(
+                                    "Failed to download release with error: {}",
+                                    reason_str
+                                )),
+                                button(text("Ok").center()).on_press(Message::CloseDownloadError(
+                                    game.name_id.to_string()
+                                ))
+                            ]
+                            .spacing(40)
+                            .align_x(Center)
+                            .width(Fill)
+                            .into()
+                        }
                     },
                 }))
                 .height(Fill)
@@ -419,14 +444,18 @@ impl DropsClient {
     }
 
     fn show_game(&self, game: &Game) -> Column<Message> {
+        let channel = self.selected_channel.as_ref().unwrap();
+
         let newest_installed = game
             .releases
             .iter()
             .filter(|x| x.state == Installed)
+            .filter(|x| &x.channel_name == channel)
             .max_by(|x, y| x.release_date.cmp(&y.release_date));
         let latest_release = game
             .releases
             .iter()
+            .filter(|x| &x.channel_name == channel)
             .max_by(|x, y| x.release_date.cmp(&y.release_date));
 
         let option_button = match newest_installed {
@@ -455,11 +484,23 @@ impl DropsClient {
             game.releases
                 .iter()
                 .fold((HashSet::new(), HashSet::new()), |(mut a, mut b), c| {
-                    a.insert(c.version.to_string());
+                    // Only show version if is selected channel
+                    if self
+                        .selected_channel
+                        .as_ref()
+                        .is_some_and(|x| x == &c.channel_name)
+                    {
+                        a.insert(c.version.to_string());
+                    }
                     b.insert(c.channel_name.to_string());
                     (a, b)
                 });
-        let channels: Vec<String> = channels.iter().map(|y| y.to_string()).collect();
+        let mut channels = channels
+            .iter()
+            .map(|y| y.to_string())
+            .collect::<Vec<String>>();
+        channels.sort();
+
         let dropdown = pick_list(
             channels,
             self.selected_channel.as_ref(),
@@ -551,7 +592,14 @@ impl DropsClient {
             Message::ConfigOpened(result) => {
                 self.config = match result {
                     Ok(config) => Some(config),
-                    Err(_) => None,
+                    Err(e) => {
+                        let error_message = match e {
+                            ConfigError::DialogClosed => "Dialog closed".to_string(),
+                            ConfigError::IoError(e) => format!("io error: {}", e).to_string(),
+                        };
+                        println!("failed to open config, recreating {}", error_message);
+                        None
+                    }
                 };
                 if self.config.is_some() {
                     self.login.username_input = self.config.as_ref().unwrap().get_username();
@@ -618,10 +666,7 @@ impl DropsClient {
             }
             Message::SelectGame(game) => {
                 self.selected_channel = match game.selected_channel.as_ref() {
-                    None => match game.releases.first() {
-                        None => None,
-                        Some(release) => Some(release.channel_name.to_string()),
-                    },
+                    None => game.releases.first().map(|x| x.channel_name.to_string()),
                     Some(channel) => Some(channel.to_string()),
                 };
                 self.selected_game = Some(game);
@@ -644,7 +689,7 @@ impl DropsClient {
                         executable_path
                     ));
 
-                let output = child.wait();
+                let _ = child.wait();
                 self.is_playing = true;
             }
             Message::Install(game, release) => {
@@ -654,11 +699,14 @@ impl DropsClient {
             Message::UsernameChanged(s) => self.login.username_input = s,
             Message::GamesFetched(Err(e)) => {
                 match e {
-                    FetchGamesError::APIError(_) => {}
-                    FetchGamesError::Unreachable(_) => {}
+                    FetchGamesError::APIError(ref inner) => {
+                        println!("api error: {}", &inner)
+                    }
+                    FetchGamesError::Unreachable(ref inner) => {
+                        println!("api error: {}", &inner);
+                    }
                     FetchGamesError::NotFound => {}
-                    FetchGamesError::BadCredentials => {}
-                    FetchGamesError::NeedRelogin => {
+                    FetchGamesError::NeedRelogin | FetchGamesError::BadCredentials => {
                         self.screen = Screen::Login;
                         self.config.as_mut().unwrap().clear_session_token();
                     }
@@ -673,8 +721,13 @@ impl DropsClient {
                     .expect("Failed to receive games response");
             }
             Message::PasswordChanged(s) => self.login.password_input = SecretString::new(s.into()),
-            Message::WizardCanReachHostChecked(can_reach) => {
-                self.wizard.has_valid_host = can_reach;
+            Message::WizardCanReachHostChecked(Err(reason)) => {
+                self.wizard.host_error = reason;
+                self.is_checking_host_reachable = false;
+            }
+            Message::WizardCanReachHostChecked(Ok(())) => {
+                self.wizard.has_valid_host = true;
+                self.wizard.host_error = String::new();
                 self.is_checking_host_reachable = false;
             }
             Message::FinishWizard => {

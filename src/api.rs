@@ -40,7 +40,6 @@ pub async fn login(
         .send()
         .await?;
 
-    println!("{:?}", resp.headers());
 
     match resp.status() {
         StatusCode::OK => {
@@ -118,6 +117,19 @@ pub fn unzip_file(
     Ok(())
 }
 
-pub async fn can_reach_host(url: String) -> bool {
-    build_client().get(url).send().await.is_ok()
+pub async fn can_reach_host(url: String) -> Result<(), String> {
+    match build_client().get(url).send().await {
+        Ok(x) => {
+            if x.status() == 200 {
+                let page = x.text().await.unwrap();
+                match page.contains("💧") {
+                    true => Ok(()),
+                    false => Err("not a drops server".to_string()),
+                }
+            } else {
+                Err(format!("failed with err: {}", x.status()).to_string())
+            }
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }

@@ -157,7 +157,7 @@ impl ClientConfig {
         let as_str = serde_json::to_string(self)?;
 
         let mut file = File::create(get_config_file_path())?;
-        file.write_all(&as_str.as_bytes())?;
+        file.write_all(as_str.as_bytes())?;
 
         Ok(())
     }
@@ -203,7 +203,7 @@ impl DropsAccountConfig {
         let releases: Vec<Release> = game_info
             .releases
             .iter()
-            .map(|r| Self::create_new_release(r))
+            .map(Self::create_new_release)
             .collect();
 
         let selected_channel = match game_info.default_channel {
@@ -245,17 +245,15 @@ impl DropsAccountConfig {
             .releases
             .iter()
             .filter(|x| {
-                existing_game
+                !existing_game
                     .releases
                     .iter()
-                    .find(|y| y.version == x.version)
-                    .is_none()
+                    .any(|y| y.version == x.version)
             })
             .collect();
 
         patched_game.releases = new
             .iter()
-            .into_iter()
             .map(|x| Self::create_new_release(x))
             .collect();
 
