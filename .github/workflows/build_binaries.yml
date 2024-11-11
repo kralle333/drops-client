@@ -20,19 +20,14 @@ jobs:
           echo "Found version: $version"
 
       - name: Check if release exists
-        id: release_exists
-        uses: softprops/action-gh-release@v1
+        id: check_release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: "v${{ env.version }}"
-        continue-on-error: true
-
-      - name: Stop job if release already exists
-        if: steps.release_exists.outputs.created == 'true'
+          VERSION: ${{ env.version }}
         run: |
-          echo "Release v${{ env.version }} already exists. Skipping."
-          exit 0
+          if gh release view "v$VERSION" > /dev/null 2>&1; then
+            echo "Release v$VERSION already exists. Skipping."
+            exit 0
+          fi
 
   build_linux_windows:
     runs-on: ubuntu-latest
