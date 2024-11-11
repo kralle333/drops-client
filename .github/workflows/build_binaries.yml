@@ -67,7 +67,6 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Zip Binary
       - name: Move and Rename Binary
         run: |
           Move-Item -Path target/release/drops-client -Destination drops-client.exe
