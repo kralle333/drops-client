@@ -69,7 +69,7 @@ jobs:
 
       - name: Move and Rename Binary
         run: |
-          Move-Item -Path target/release/drops-client -Destination drops-client.exe
+          Move-Item -Path target/release/drops-client.exe -Destination drops-client.exe
         shell: pwsh
       - name: Compress Binary
         run: Compress-Archive -Path drops-client.exe -DestinationPath windows.zip
