@@ -29,7 +29,7 @@ jobs:
             exit 0
           fi
 
-  build_linux_windows:
+  build_linux:
     runs-on: ubuntu-latest
     needs: check-release
     steps:
@@ -39,17 +39,8 @@ jobs:
       - name: Set up Rust
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
-
       - name: Build for Linux
         run: cargo build --release
-
-      - name: Install Cross
-        run: cargo install cross
-        
-      - name: Build for Windows
-        run: cross build --target x86_64-pc-windows-gnu --release
-        env:
-          CARGO_TERM_COLOR: always
 
       - name: Zip Linux Binary
         run: |
@@ -57,17 +48,30 @@ jobs:
           zip linux.zip drops-client
         shell: bash
 
-      - name: Zip Windows Binary
-        run: |
-          mv target/x86_64-pc-windows-gnu/release/drops-client.exe drops-client.exe
-          zip windows.zip drops-client.exe
-        shell: bash
-
       - name: Upload Linux Binary
         uses: actions/upload-artifact@v4
         with:
           name: linux
           path: linux.zip
+
+  build_windows:
+    runs-on: windows-latest
+    needs: check-release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Zip Binary
+        run: |
+          mv target/release/drops-client drops-client.exe
+          zip windows.zip drops-client.exe
+        shell: bash
 
       - name: Upload Windows Binary
         uses: actions/upload-artifact@v4
@@ -102,7 +106,7 @@ jobs:
 
   release:
     runs-on: ubuntu-latest
-    needs: [ build_linux_windows, build_macos ]
+    needs: [ build_windows,build_linux, build_macos ]
     steps:
       - name: Check out repository
         uses: actions/checkout@v3
