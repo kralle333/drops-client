@@ -1,19 +1,128 @@
-name: Build Project and Create Release
-
+name: Build and Release Rust Binary
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - 'Cargo.toml'
+
 jobs:
-  build-upload:
-    runs-on: macos-13
+  check-release:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
-      - run: cargo build --release
-      - run: |
-          mkdir drops-bin
-          mv target/release/drops-client drops-bin
-      - name: Upload Build Artifacts
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Get version from Cargo.toml
+        id: cargo
+        run: |
+          version=$(grep '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          echo "version=$version" >> $GITHUB_ENV
+          echo "Found version: $version"
+
+      - name: Check if release exists
+        id: release_exists
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: "v${{ env.version }}"
+        continue-on-error: true
+
+      - name: Stop job if release already exists
+        if: steps.release_exists.outputs.created == 'true'
+        run: |
+          echo "Release v${{ env.version }} already exists. Skipping."
+          exit 0
+
+  build_linux_windows:
+    runs-on: ubuntu-latest
+    needs: check-release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install Cross
+        run: cargo install cross
+
+      - name: Build for Linux
+        run: cross build --target x86_64-unknown-linux-gnu --release
+        env:
+          CARGO_TERM_COLOR: always
+
+      - name: Build for Windows
+        run: cross build --target x86_64-pc-windows-gnu --release
+        env:
+          CARGO_TERM_COLOR: always
+
+      - name: Zip Linux Binary
+        run: |
+          mv target/x86_64-unknown-linux-gnu/release/drops-client drops-client
+          zip linux.zip drops-client
+        shell: bash
+
+      - name: Zip Windows Binary
+        run: |
+          mv target/x86_64-pc-windows-gnu/release/drops-client.exe drops-client.exe
+          zip windows.zip drops-client.exe
+        shell: bash
+
+      - name: Upload Linux Binary
         uses: actions/upload-artifact@v4
         with:
-          name: builds
-          path: ${{ github.workspace }}/drops-bin/
+          name: linux
+          path: linux.zip
+
+      - name: Upload Windows Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: windows.zip
+
+  build_macos:
+    runs-on: macos-13
+    needs: check-release
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Build for macOS
+        run: cargo build --release
+
+      - name: Zip macOS Binary
+        run: |
+          mv target/release/drops-client drops-client
+          zip mac.zip drops-client
+        shell: bash
+
+      - name: Upload macOS Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: mac.zip
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [ build_linux_windows, build_macos ]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+      - name: Delete uploaded artifacts
+        uses: geekyeggo/delete-artifact@v5
+
+      - name: Create GitHub Release
+        id: create_release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ env.VERSION }} # Use the version from the file
+          draft: false
+          prerelease: false
+          generateReleaseNotes: true
+          artifacts: ${{ github.workspace }}/*.zip

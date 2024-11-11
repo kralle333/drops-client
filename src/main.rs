@@ -318,11 +318,7 @@ impl DropsClient {
                     .push(col)
                     .push(horizontal_space());
 
-                Container::new(r)
-                    .center(0)
-                    .width(iced::Length::Fill)
-                    .height(iced::Length::Fill)
-                    .into()
+                Container::new(r).center(0).width(Fill).height(Fill).into()
             }
             Screen::LoggingIn => Container::new(column![text("logging in")
                 .size(40)
@@ -490,7 +486,7 @@ impl DropsClient {
                         .as_ref()
                         .is_some_and(|x| x == &c.channel_name)
                     {
-                        a.insert(c.version.to_string());
+                        a.insert((c.version.to_string(), c.description.to_string()));
                     }
                     b.insert(c.channel_name.to_string());
                     (a, b)
@@ -519,12 +515,15 @@ impl DropsClient {
             .spacing(10)
             .width(200);
 
-        let mut versions: Vec<String> = versions.into_iter().map(|x| x).collect();
-        versions.sort();
+        let mut versions: Vec<(String, String)> = versions.into_iter().map(|x| x).collect();
+        versions.sort_by(|(_, x), (_, y)| x.cmp(y));
 
         let versions = versions
             .into_iter()
-            .fold(column![], |c, version| c.push(text(version).size(16)))
+            .fold(column![], |c, (version, description)| {
+                c.push(text(version).size(16))
+                    .push(text(description).size(12))
+            })
             .spacing(10);
 
         column![

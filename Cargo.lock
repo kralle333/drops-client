@@ -1195,7 +1195,7 @@ dependencies = [
 
 [[package]]
 name = "drops-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1223,9 +1223,9 @@ dependencies = [
 
 [[package]]
 name = "drops-messages"
-version = "0.1.13"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76eb7ce33865381d91a2fcbb9fe8f02a6f0da8ec2c308a15436eb3d4080bb83a"
+checksum = "55cbd07365897debb0a3ba15f50c98c152f2306f87bad4c635f0460066d35dcc"
 dependencies = [
  "chrono",
  "serde",

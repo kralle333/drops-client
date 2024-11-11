@@ -12,9 +12,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use uuid::Uuid;
 
-#[cfg(test)]
-mod tests {}
-
 pub fn get_config_dir() -> PathBuf {
     ProjectDirs::from("com", "Drops", "Drops Client")
         .unwrap()
@@ -71,6 +68,7 @@ pub enum ReleaseState {
 pub struct Release {
     pub channel_name: String,
     pub version: String,
+    pub description: String,
     pub state: ReleaseState,
     pub release_date: DateTime<Utc>,
     pub executable_path: String,
@@ -191,6 +189,7 @@ impl DropsAccountConfig {
     fn create_new_release(r: &ReleaseInfoResponse) -> Release {
         Release {
             channel_name: r.channel.to_string(),
+            description: r.description.to_string(),
             version: r.version.to_string(),
             state: ReleaseState::NotInstalled,
             release_date: r.release_date,
@@ -252,10 +251,7 @@ impl DropsAccountConfig {
             })
             .collect();
 
-        patched_game.releases = new
-            .iter()
-            .map(|x| Self::create_new_release(x))
-            .collect();
+        patched_game.releases = new.iter().map(|x| Self::create_new_release(x)).collect();
 
         patched_game.releases.extend(existing_game.releases);
 
