@@ -131,7 +131,7 @@ jobs:
         id: create_release
         uses: ncipollo/release-action@v1
         with:
-          tag: v${{ env.VERSION }} # Use the version from the file
+          tag: v${{ env.version }} # Use the version from the file
           draft: false
           prerelease: false
           generateReleaseNotes: true
