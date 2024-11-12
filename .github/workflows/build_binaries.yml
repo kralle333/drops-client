@@ -111,6 +111,9 @@ jobs:
         uses: actions/download-artifact@v4
       - name: Delete uploaded artifacts
         uses: geekyeggo/delete-artifact@v5
+        with:
+          name: artifact
+      - run: ls artifact/
       - name: Get version from Cargo.toml
         id: cargo
         run: |
