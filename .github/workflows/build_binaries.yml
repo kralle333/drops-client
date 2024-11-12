@@ -66,11 +66,13 @@ jobs:
       - name: Build
         run: cargo build --release
 
-      - name: Zip Binary
+      - name: Move and Rename Binary
         run: |
-          mv target/release/drops-client drops-client.exe
-          zip windows.zip drops-client.exe
-        shell: bash
+          Move-Item -Path target/release/drops-client.exe -Destination drops-client.exe
+        shell: pwsh
+      - name: Compress Binary
+        run: Compress-Archive -Path drops-client.exe -DestinationPath windows.zip
+        shell: pwsh
 
       - name: Upload Windows Binary
         uses: actions/upload-artifact@v4
