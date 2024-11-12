@@ -35,6 +35,7 @@ pub fn ensure_path() {
 pub struct ClientConfig {
     pub active_account: Uuid,
     pub accounts: Vec<DropsAccountConfig>,
+    pub is_active: bool,
 }
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
 pub struct DropsAccountConfig {
@@ -42,7 +43,7 @@ pub struct DropsAccountConfig {
     pub games_dir: String,
     pub url: String,
     pub username: String,
-    pub session_token: String,
+    pub session_token: SessionToken,
     pub games: Vec<Game>,
 }
 
@@ -61,7 +62,6 @@ pub struct Game {
 pub enum ReleaseState {
     NotInstalled,
     Installed,
-    NeedsUpdate,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
@@ -101,13 +101,13 @@ impl ClientConfig {
     }
 
     pub fn set_session_token(&mut self, token: SessionToken) {
-        self.get_active_account_mut().unwrap().session_token = token.0;
+        self.get_active_account_mut().unwrap().session_token = token;
     }
 
     pub fn has_session_token(&self) -> bool {
-        !self.get_session_token().is_empty()
+        !self.get_session_token().0.is_empty()
     }
-    pub fn get_session_token(&self) -> String {
+    pub fn get_session_token(&self) -> SessionToken {
         self.get_active_account().unwrap().session_token
     }
     pub(crate) fn get_games_dir(&self) -> String {
@@ -122,7 +122,7 @@ impl ClientConfig {
     }
 
     pub fn clear_session_token(&mut self) {
-        self.get_active_account_mut().unwrap().session_token = "".to_string();
+        self.get_active_account_mut().unwrap().session_token = SessionToken("".to_string());
         self.save().unwrap()
     }
 

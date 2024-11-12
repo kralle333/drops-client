@@ -1,4 +1,3 @@
-use crate::client_config::ClientConfig;
 use crate::errors::LoginError::{APIError, BadCredentials, MissingSessionToken};
 use crate::errors::{FetchGamesError, LoginError};
 use crate::{default_platform, SessionToken};
@@ -28,18 +27,17 @@ pub(crate) fn build_client() -> Client {
 }
 
 pub async fn login(
-    config: ClientConfig,
+    drops_url: String,
     username: String,
     password: String,
 ) -> Result<SessionToken, LoginError> {
     let client = build_client();
     let resp = client
-        .post(format!("{}/login", config.get_drops_url()))
+        .post(format!("{}/login", drops_url))
         .timeout(Duration::from_secs(5))
         .basic_auth(username, Some(password))
         .send()
         .await?;
-
 
     match resp.status() {
         StatusCode::OK => {
@@ -54,17 +52,20 @@ pub async fn login(
     }
 }
 
-pub async fn fetch_games(config: ClientConfig) -> Result<GetGamesResponse, FetchGamesError> {
+pub async fn fetch_games(
+    url: String,
+    session_token: SessionToken,
+) -> Result<GetGamesResponse, FetchGamesError> {
     let req = GetGamesRequest {
         platform: Some(default_platform().into()),
     };
 
     let client = build_client();
-    let url = format!("{}/games", config.get_drops_url());
+    let url = format!("{}/games", url);
     let resp = client
         .get(url)
         .json(&req)
-        .header("Cookie", config.get_session_token())
+        .header("Cookie", session_token.0)
         .timeout(Duration::from_secs(5))
         .send()
         .await?;

@@ -47,7 +47,7 @@ impl Download {
             game_name_id: game.name_id.to_string(),
             game_dir: config.get_games_dir(),
             url: config.get_drops_url(),
-            session_token: SessionToken(config.get_session_token()),
+            session_token: config.get_session_token(),
             version: release.version.to_string(),
             channel_name: release.channel_name.to_string(),
             state: DownloadState::Downloading {

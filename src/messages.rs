@@ -1,7 +1,7 @@
 use crate::client_config::{ClientConfig, Game, Release};
 use crate::downloading::{DownloadError, DownloadProgress};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
-use crate::SessionToken;
+use crate::{Screen, SessionToken};
 use drops_messages::requests::GetGamesResponse;
 
 #[derive(Debug, Clone)]
@@ -11,21 +11,25 @@ pub enum Message {
     LoggedInFinished(Result<SessionToken, LoginError>),
     FetchGames,
     GamesFetched(Result<GetGamesResponse, FetchGamesError>),
+
     SelectGame(Game),
     Run(Release),
-    Install(Game, Release),
-    SelectGamesDir,
+    Download(Game, Release),
+
     UsernameChanged(String),
     PasswordChanged(String),
     DropsUrlChanged(String),
     TestDropsUrl,
+
     WizardCanReachHostChecked(Result<(), String>),
     ChannelChanged(String),
     ServerChanged(String),
+    SelectGamesDir,
     FinishWizard,
-    GoToWizard,
-    GoToLogin,
+
+    GoToScreen(Screen),
     DownloadProgressing((String, Result<DownloadProgress, DownloadError>)),
     CloseDownloadError(String),
     Logout,
+    ClearRequestedGameToPlay,
 }

@@ -1,16 +1,24 @@
 #![windows_subsystem = "windows"]
 mod api;
+mod blackboard;
 mod client_config;
 mod downloading;
 mod errors;
+mod handlers;
 mod messages;
+mod tasks;
 
-use crate::api::{can_reach_host, fetch_games, login};
-use crate::client_config::ReleaseState::Installed;
-use crate::client_config::{ClientConfig, DropsAccountConfig, Game};
-use crate::downloading::{Download, DownloadError, DownloadProgress, DownloadState};
+use crate::client_config::{ClientConfig, Game, Release, ReleaseState};
+use crate::downloading::DownloadError;
+use crate::downloading::DownloadState;
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
+use crate::handlers::download::DownloadMessageHandler;
+use crate::handlers::games::GamesMessageHandler;
+use crate::handlers::login::LoginMessageHandler;
+use crate::handlers::wizard::WizardMessageHandler;
+use crate::handlers::MessageHandler;
 use crate::messages::Message;
+use blackboard::Blackboard;
 use env_logger::Env;
 use iced::widget::{
     button, column, container, horizontal_space, pick_list, progress_bar, row, scrollable, text,
@@ -19,52 +27,25 @@ use iced::widget::{
 use iced::{window, Center, Color, Element, Fill, Size, Task};
 use iced_futures::Subscription;
 use log::error;
-use rfd::FileDialog;
 use secrecy::{ExposeSecret, SecretString};
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::default::Default;
-use std::path::PathBuf;
-use std::process::Command;
-use uuid::Uuid;
+use std::env;
 
 #[derive(Default)]
 struct DropsClient {
-    login: LoginInput,
-    wizard: WizardInput,
-    config: Option<ClientConfig>,
-    is_checking_host_reachable: bool,
-    screen: Screen,
-    selected_game: Option<Game>,
-    is_playing: bool,
-    selected_channel: Option<String>,
-    downloads: Vec<Download>,
+    blackboard: Blackboard,
+    downloading: DownloadMessageHandler,
+    gaming: GamesMessageHandler,
+    wizard: WizardMessageHandler,
+    login: LoginMessageHandler,
+    requested_game_to_play: Option<String>,
+    run_from_args_issue: RunFromArgsIssue,
 }
 
-#[derive(Default)]
-struct LoginInput {
-    username_input: String,
-    password_input: SecretString,
-    error_reason: Option<String>,
-}
-
-#[derive(Default)]
-struct WizardInput {
-    has_valid_games_dir: bool,
-    has_valid_host: bool,
-    host_error: String,
-    drops_url_input: String,
-    games_dir_input: String,
-}
-
-impl WizardInput {
-    pub(crate) fn clear_input(&mut self) {
-        self.drops_url_input = String::new();
-        self.games_dir_input = String::new();
-    }
-}
-
-#[derive(Default)]
-enum Screen {
+#[derive(Default, Clone, Debug)]
+pub enum Screen {
     #[default]
     Wizard,
     Login,
@@ -72,7 +53,16 @@ enum Screen {
     Main,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Default)]
+enum RunFromArgsIssue {
+    #[default]
+    NotSet,
+    CanPlay(Release),
+    Error(String),
+    FoundUpdate(Game, Release, Release),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SessionToken(String);
 
 impl SessionToken {
@@ -102,8 +92,16 @@ pub fn default_platform() -> &'static str {
 
 impl DropsClient {
     pub fn new() -> (Self, Task<Message>) {
+        let mut client = DropsClient { ..Self::default() };
+        let mut args = env::args();
+        if args.len() == 2 {
+            let _ = args.next();
+            let requested_game_to_play = args.next();
+            client.requested_game_to_play = requested_game_to_play;
+        }
+
         (
-            DropsClient { ..Self::default() },
+            client,
             Task::batch([Task::perform(
                 ClientConfig::load_config(),
                 Message::ConfigOpened,
@@ -118,44 +116,26 @@ impl DropsClient {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch(self.downloads.iter().map(Download::subscription))
+        self.downloading.subscription()
     }
 
-    fn perform_login(&self) -> Task<Message> {
-        Task::perform(
-            login(
-                self.config.clone().unwrap(),
-                self.login.username_input.to_string(),
-                self.login.password_input.expose_secret().to_string(),
-            ),
-            Message::LoggedInFinished,
-        )
-    }
-
-    fn perform_fetch_games(&mut self) -> Task<Message> {
-        let config = self.config.clone().unwrap();
-        Task::perform(fetch_games(config), Message::GamesFetched)
-    }
-
-    fn check_host_reachable(&mut self, url: &str) -> Task<Message> {
-        self.is_checking_host_reachable = true;
-        Task::perform(
-            can_reach_host(url.to_string()),
-            Message::WizardCanReachHostChecked,
-        )
+    fn have_valid_config(&self) -> bool {
+        self.blackboard.config.is_active
     }
 
     fn login_column(&self) -> Column<Message> {
-        let config = self.config.as_ref().unwrap();
-        let options = config
+        let options = self
+            .blackboard
+            .config
             .accounts
             .iter()
             .map(|x| x.url.to_string())
             .collect::<Vec<String>>();
 
-        let active_one = config.get_active_account();
+        let active_one = self.blackboard.config.get_active_account();
         let default = active_one.map(|account| {
-            config
+            self.blackboard
+                .config
                 .accounts
                 .iter()
                 .find(|x| x.id == account.id)
@@ -185,7 +165,7 @@ impl DropsClient {
             .width(200);
 
         let new_server_button = button(text("new server").center())
-            .on_press(Message::GoToWizard)
+            .on_press(Message::GoToScreen(Screen::Wizard))
             .padding(5)
             .width(150);
 
@@ -225,7 +205,8 @@ impl DropsClient {
 
         let button_width = 80;
         let button_height = 40;
-        let can_test = !self.is_checking_host_reachable && !self.wizard.drops_url_input.is_empty();
+        let can_test =
+            !self.wizard.is_checking_host_reachable && !self.wizard.drops_url_input.is_empty();
         let button_work = can_test.then_some(true);
 
         let host_err_text = match self.wizard.has_valid_host {
@@ -263,12 +244,16 @@ impl DropsClient {
             .spacing(20)
             .align_y(Center);
 
-        let should_show = match self.wizard.has_valid_games_dir && self.wizard.has_valid_host {
+        let should_show = match !(!self.wizard.has_valid_games_dir || !self.wizard.has_valid_host) {
             true => Some(true),
             false => None,
         };
-        let cancel_button = match self.config.as_ref().is_some() {
-            true => Some(button("cancel").on_press(Message::GoToLogin).padding(10)),
+        let cancel_button = match self.have_valid_config() {
+            true => Some(
+                button("cancel")
+                    .on_press(Message::GoToScreen(Screen::Login))
+                    .padding(10),
+            ),
             false => None,
         };
 
@@ -297,9 +282,9 @@ impl DropsClient {
     }
 
     pub fn view(&self) -> Element<Message> {
-        match self.screen {
+        match self.blackboard.screen {
             Screen::Wizard | Screen::Login => {
-                let (title, col) = match self.screen {
+                let (title, col) = match self.blackboard.screen {
                     Screen::Login => ("drops", self.login_column()),
                     Screen::Wizard => ("welcome", self.wizard_column()),
                     _ => ("invalid", column![]),
@@ -326,11 +311,44 @@ impl DropsClient {
             .center(0)
             .into(),
             Screen::Main => {
+                match &self.run_from_args_issue {
+                    RunFromArgsIssue::Error(message) => {
+                        return container(column![].push(text(message)).push(
+                            button(text("close")).on_press(Message::ClearRequestedGameToPlay),
+                        ))
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into();
+                    }
+                    RunFromArgsIssue::FoundUpdate(game, new_release, installed_release) => {
+                        return container(
+                            column![].push(text("Found newer release, update?")).push(
+                                row![]
+                                    .push(button(text("update")).on_press(Message::Download(
+                                        game.clone(),
+                                        new_release.clone(),
+                                    )))
+                                    .push(
+                                        button(text("play"))
+                                            .on_press(Message::Run(installed_release.clone())),
+                                    )
+                                    .spacing(10),
+                            ),
+                        )
+                        .width(Fill)
+                        .height(Fill)
+                        .center(Fill)
+                        .into();
+                    }
+                    _ => {}
+                }
+
                 let header = container(
                     row![
                         text(format!(
                             "Logged in as  {}",
-                            self.config.as_ref().unwrap().get_username()
+                            self.blackboard.config.get_username()
                         )),
                         horizontal_space(),
                         "drops",
@@ -341,7 +359,7 @@ impl DropsClient {
                     .align_y(Center),
                 );
 
-                let games = self.config.as_ref().unwrap().get_account_games();
+                let games = self.blackboard.config.get_account_games();
                 let game_count = games.len();
                 let games: Element<Message> = column(games.into_iter().map(|x| {
                     button(text(x.name.to_string()).center())
@@ -349,6 +367,7 @@ impl DropsClient {
                         .on_press(Message::SelectGame(x.clone()))
                         .into()
                 }))
+                .spacing(10)
                 .into();
 
                 let sidebar_column = column![
@@ -357,11 +376,10 @@ impl DropsClient {
                         text("Games").align_x(Center).size(22),
                         horizontal_space()
                     ],
-                    vertical_space().height(5),
+                    vertical_space().height(15),
                     games,
                     vertical_space()
                 ]
-                .spacing(10)
                 .padding(10)
                 .width(160);
 
@@ -369,10 +387,11 @@ impl DropsClient {
                     .style(container::dark)
                     .center_y(Fill);
 
-                let download_state = match &self.selected_game {
+                let download_state = match &self.blackboard.selected_game {
                     None => DownloadState::Idle,
                     Some(game) => {
                         let state = self
+                            .downloading
                             .downloads
                             .iter()
                             .find(|x| x.game_name_id == game.name_id);
@@ -383,7 +402,7 @@ impl DropsClient {
                     }
                 };
 
-                let content = container(scrollable(match &self.selected_game {
+                let content = container(scrollable(match &self.blackboard.selected_game {
                     None if game_count > 0 => {
                         column![text("Welcome!").size(48), "Select game to the left"]
                             .spacing(40)
@@ -438,27 +457,42 @@ impl DropsClient {
             }
         }
     }
+    fn newest_release_by_state(
+        releases: &[Release],
+        channel: Option<&str>,
+        state: Option<ReleaseState>,
+    ) -> Option<Release> {
+        releases
+            .iter()
+            .filter(|x| channel.map_or(true, |c| x.channel_name == c))
+            .filter(|x| state.as_ref().map_or(true, |s| &x.state == s))
+            .max_by(|x, y| x.release_date.cmp(&y.release_date))
+            .map(|x| x.clone())
+    }
 
     fn show_game(&self, game: &Game) -> Column<Message> {
-        let channel = self.selected_channel.as_ref().unwrap();
+        if game.releases.is_empty() {
+            return column![text("found no releases")];
+        }
+        let channel = match &self.blackboard.selected_channel {
+            None => {
+                return column![text("no channel set")];
+            }
+            Some(c) => c,
+        };
 
-        let newest_installed = game
-            .releases
-            .iter()
-            .filter(|x| x.state == Installed)
-            .filter(|x| &x.channel_name == channel)
-            .max_by(|x, y| x.release_date.cmp(&y.release_date));
-        let latest_release = game
-            .releases
-            .iter()
-            .filter(|x| &x.channel_name == channel)
-            .max_by(|x, y| x.release_date.cmp(&y.release_date));
+        let newest_installed = Self::newest_release_by_state(
+            &game.releases,
+            Some(channel),
+            Some(ReleaseState::Installed),
+        );
+        let latest_release = Self::newest_release_by_state(&game.releases, Some(channel), None);
 
         let option_button = match newest_installed {
             None => match latest_release {
                 None => button(text("Fetch releases").center()).on_press(Message::FetchGames),
                 Some(latest) => button(text("Install").center())
-                    .on_press(Message::Install(game.clone(), latest.clone())),
+                    .on_press(Message::Download(game.clone(), latest.clone())),
             },
             Some(release) => {
                 let play_button =
@@ -466,7 +500,7 @@ impl DropsClient {
                 if let Some(latest) = latest_release {
                     if &latest.version != &release.version {
                         button(text("Update").center())
-                            .on_press(Message::Install(game.clone(), latest.clone()))
+                            .on_press(Message::Download(game.clone(), latest.clone()))
                     } else {
                         play_button
                     }
@@ -482,6 +516,7 @@ impl DropsClient {
                 .fold((HashSet::new(), HashSet::new()), |(mut a, mut b), c| {
                     // Only show version if is selected channel
                     if self
+                        .blackboard
                         .selected_channel
                         .as_ref()
                         .is_some_and(|x| x == &c.channel_name)
@@ -499,11 +534,11 @@ impl DropsClient {
 
         let dropdown = pick_list(
             channels,
-            self.selected_channel.as_ref(),
+            self.blackboard.selected_channel.as_ref(),
             Message::ChannelChanged,
         );
 
-        let dropdown = match self.selected_channel {
+        let dropdown = match self.blackboard.selected_channel {
             None => None,
             Some(_) => Some(dropdown),
         };
@@ -516,7 +551,7 @@ impl DropsClient {
             .width(200);
 
         let mut versions: Vec<(String, String)> = versions.into_iter().map(|x| x).collect();
-        versions.sort_by(|(_, x), (_, y)| x.cmp(y));
+        versions.sort_by(|(_, x), (_, y)| y.cmp(x));
 
         let versions = versions
             .into_iter()
@@ -527,175 +562,131 @@ impl DropsClient {
             .spacing(10);
 
         column![
-            text(game.name.to_string()).size(32),
+            text(game.name.to_string())
+                .size(32)
+                .width(450)
+                .align_x(Center),
             vertical_space().height(3),
             row![buttons],
             vertical_space().height(20),
             text("Description").size(20),
             vertical_space().height(2),
-            text(game.description.to_string()).size(16),
+            text(game.description.to_string())
+                .size(14)
+                .width(450)
+                .align_x(Center),
             vertical_space().height(15),
             text("Releases").size(20),
             vertical_space().height(2),
-            versions
+            scrollable(versions).width(400)
         ]
         .align_x(Center)
         .width(Fill)
     }
 
+    fn handle_args_game_running(&mut self) -> RunFromArgsIssue {
+        let Some(game_name_id) = &self.requested_game_to_play else {
+            return RunFromArgsIssue::NotSet;
+        };
+
+        let games = self.blackboard.config.get_account_games();
+        let Some(game) = games.iter().find(|x| &x.name_id == game_name_id) else {
+            return RunFromArgsIssue::Error(format!(
+                "Invalid game {}, but its not installed",
+                game_name_id
+            ));
+        };
+        self.blackboard.selected_game = Some(game.clone());
+        let channel = match &game.selected_channel {
+            None => {
+                let release = Self::newest_release_by_state(
+                    &game.releases,
+                    None,
+                    Some(ReleaseState::Installed),
+                );
+                if release.is_none() {
+                    return RunFromArgsIssue::Error(format!(
+                        "Found game {}, but its not installed",
+                        game.name
+                    ));
+                }
+                release.unwrap().channel_name
+            }
+            Some(c) => c.to_string(),
+        };
+        self.blackboard.selected_channel = Some(channel.to_string());
+        let release = Self::newest_release_by_state(
+            &game.releases,
+            Some(&channel),
+            Some(ReleaseState::Installed),
+        );
+
+        if release.is_none() {
+            return RunFromArgsIssue::Error(format!(
+                "Found no installed releases for game {}, download one",
+                game.name.to_string()
+            ));
+        }
+        let installed_latest_release = release.unwrap();
+        match Self::newest_release_by_state(&game.releases, Some(&channel), None) {
+            None => {
+                // user has the latest release but somehow ended up here...
+                RunFromArgsIssue::CanPlay(installed_latest_release)
+            }
+            Some(latest) if latest.version == installed_latest_release.version => {
+                RunFromArgsIssue::CanPlay(installed_latest_release)
+            }
+            Some(latest) => {
+                RunFromArgsIssue::FoundUpdate(game.clone(), latest, installed_latest_release)
+            }
+        }
+    }
+
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::GoToLogin => {
-                self.screen = Screen::Login;
+            Message::ClearRequestedGameToPlay => self.requested_game_to_play = None,
+            Message::GoToScreen(screen) => {
+                self.blackboard.screen = screen;
             }
-            Message::GoToWizard => {
-                self.screen = Screen::Wizard;
+            // Games
+            Message::Run(_) | Message::SelectGame(_) => {
+                return self.gaming.update(message, &mut self.blackboard)
             }
-            Message::DownloadProgressing((id, Ok(progress))) => match progress {
-                DownloadProgress::Downloading { percent } => {
-                    self.downloads
-                        .iter_mut()
-                        .find(|x| x.game_name_id == id)
-                        .unwrap()
-                        .state = DownloadState::Downloading {
-                        progress_percentage: percent,
-                    }
-                }
-                DownloadProgress::Finished { release } => {
-                    let config = self.config.as_mut().unwrap();
-                    if let Err(_) = config.update_install_state(
-                        &release.game_name_id,
-                        &release.version,
-                        &release.channel_name,
-                        Installed,
-                    ) {
-                        //TODO: Display error
-                        error!("failed to update config install state");
-                    }
-                    config.save().expect("failed to save config!");
-                    self.update_selected_game();
 
-                    self.downloads.retain(|x| x.game_name_id != id);
-                }
-            },
-            Message::DownloadProgressing((id, Err(error))) => {
-                self.downloads
-                    .iter_mut()
-                    .find(|x| x.game_name_id == id)
-                    .unwrap()
-                    .state = DownloadState::Errored(error)
+            // Downloading
+            Message::CloseDownloadError(_)
+            | Message::DownloadProgressing(_)
+            | Message::Download(..) => {
+                return self.downloading.update(message, &mut self.blackboard)
             }
-            Message::CloseDownloadError(id) => {
-                self.downloads.retain(|x| x.game_name_id != id);
-            }
-            Message::ConfigOpened(result) => {
-                self.config = match result {
-                    Ok(config) => Some(config),
-                    Err(e) => {
-                        let error_message = match e {
-                            ConfigError::DialogClosed => "Dialog closed".to_string(),
-                            ConfigError::IoError(e) => format!("io error: {}", e).to_string(),
-                        };
-                        println!("failed to open config, recreating {}", error_message);
-                        None
-                    }
-                };
-                if self.config.is_some() {
-                    self.login.username_input = self.config.as_ref().unwrap().get_username();
-                }
 
-                let mut fetch_games = false;
-                self.screen = match self.config.as_ref() {
-                    Some(config) if config.has_session_token() => {
-                        fetch_games = true;
-                        Screen::Main
-                    }
-                    Some(_) => Screen::Login,
-                    None => Screen::Wizard,
-                };
-                if fetch_games {
-                    return self.perform_fetch_games();
-                }
+            // Wizard
+            Message::WizardCanReachHostChecked(_)
+            | Message::FinishWizard
+            | Message::TestDropsUrl
+            | Message::DropsUrlChanged(_)
+            | Message::SelectGamesDir => return self.wizard.update(message, &mut self.blackboard),
+
+            // Login
+            Message::Login
+            | Message::ServerChanged(_)
+            | Message::LoggedInFinished(_)
+            | Message::UsernameChanged(_)
+            | Message::PasswordChanged(_) => {
+                return self.login.update(message, &mut self.blackboard);
             }
-            Message::TestDropsUrl => {
-                return self.check_host_reachable(&self.wizard.drops_url_input.to_string())
-            }
-            Message::Login => {
-                self.screen = Screen::LoggingIn;
-                return self.perform_login();
-            }
+
             Message::Logout => {
                 self.logout();
             }
-            Message::LoggedInFinished(result) => match result {
-                Ok(token) => {
-                    let config = self.config.as_mut().unwrap();
-                    config.set_username_and_save(&self.login.username_input);
-                    config.set_session_token(token);
-                    config.save().expect("failed to save config");
+            Message::ConfigOpened(result) => {
+                return self.handle_config_open(result);
+            }
 
-                    self.wizard.clear_input();
-                    self.screen = Screen::Main;
-                    return self.perform_fetch_games();
-                }
-                Err(e) => {
-                    self.login.error_reason = Some(format!("{:?}", e));
-                    self.screen = Screen::Login;
-                }
-            },
             Message::FetchGames => {
-                return self.perform_fetch_games();
+                return tasks::perform_fetch_games_from_config(&self.blackboard.config);
             }
-            Message::SelectGamesDir => {
-                let file = FileDialog::new().pick_folder();
-                if let Some(dir) = file {
-                    if let Some(dir_string) = dir.to_str() {
-                        self.wizard.games_dir_input = dir_string.to_string();
-                        self.wizard.has_valid_games_dir = true;
-                    }
-                }
-            }
-            Message::ServerChanged(s) => {
-                self.login.username_input.clear();
-                self.config.as_mut().unwrap().set_active_account_by_url(s);
-            }
-            Message::DropsUrlChanged(s) => {
-                self.wizard.drops_url_input = s;
-                self.wizard.has_valid_host = false;
-            }
-            Message::SelectGame(game) => {
-                self.selected_channel = match game.selected_channel.as_ref() {
-                    None => game.releases.first().map(|x| x.channel_name.to_string()),
-                    Some(channel) => Some(channel.to_string()),
-                };
-                self.selected_game = Some(game);
-            }
-            Message::Run(release) => {
-                let config = self.config.as_ref().unwrap();
-                let executable_dir = PathBuf::new()
-                    .join(&config.get_games_dir())
-                    .join(&self.selected_game.as_ref().unwrap().name_id)
-                    .join(&release.channel_name)
-                    .join(&release.version);
 
-                let executable_path = executable_dir.join(&release.executable_path);
-                let mut child = Command::new(&executable_path)
-                    .current_dir(&executable_dir)
-                    .envs(std::env::vars())
-                    .spawn()
-                    .expect(&format!(
-                        "Failed to run the binary at: {:?}",
-                        executable_path
-                    ));
-
-                let _ = child.wait();
-                self.is_playing = true;
-            }
-            Message::Install(game, release) => {
-                let config = self.config.as_ref().unwrap();
-                self.downloads.push(Download::new(&release, &game, config));
-            }
-            Message::UsernameChanged(s) => self.login.username_input = s,
             Message::GamesFetched(Err(e)) => {
                 match e {
                     FetchGamesError::APIError(ref inner) => {
@@ -706,78 +697,78 @@ impl DropsClient {
                     }
                     FetchGamesError::NotFound => {}
                     FetchGamesError::NeedRelogin | FetchGamesError::BadCredentials => {
-                        self.screen = Screen::Login;
-                        self.config.as_mut().unwrap().clear_session_token();
+                        self.blackboard.screen = Screen::Login;
+                        self.blackboard.config.clear_session_token();
                     }
                 }
                 error!("failed to fetch games! {:?}", e)
             }
             Message::GamesFetched(Ok(games_response)) => {
-                self.config
-                    .as_mut()
-                    .unwrap()
+                self.blackboard
+                    .config
                     .sync_and_save(games_response)
                     .expect("Failed to receive games response");
+
+                self.run_from_args_issue = self.handle_args_game_running();
+                if let RunFromArgsIssue::CanPlay(release) = &self.run_from_args_issue {
+                    self.blackboard
+                        .run_release(&self.requested_game_to_play.as_ref().unwrap(), &release);
+                    self.run_from_args_issue = RunFromArgsIssue::NotSet;
+                }
             }
-            Message::PasswordChanged(s) => self.login.password_input = SecretString::new(s.into()),
-            Message::WizardCanReachHostChecked(Err(reason)) => {
-                self.wizard.host_error = reason;
-                self.is_checking_host_reachable = false;
-            }
-            Message::WizardCanReachHostChecked(Ok(())) => {
-                self.wizard.has_valid_host = true;
-                self.wizard.host_error = String::new();
-                self.is_checking_host_reachable = false;
-            }
-            Message::FinishWizard => {
-                let account = DropsAccountConfig {
-                    id: Uuid::new_v4(),
-                    url: self.wizard.drops_url_input.to_string(),
-                    games_dir: self.wizard.games_dir_input.to_string(),
-                    username: "".to_string(),
-                    session_token: "".to_string(),
-                    games: vec![],
-                };
-                let mut config = self.config.clone().unwrap_or(ClientConfig::default());
-                config.active_account = account.id;
-                config.accounts.push(account.clone());
-                config.save().expect("Failed to store config!");
-                self.config = Some(config);
-                self.screen = Screen::Login;
-            }
+
             Message::ChannelChanged(channel_name) => {
-                self.selected_channel = Some(channel_name);
+                self.blackboard.selected_channel = Some(channel_name);
             }
         }
         Task::none()
     }
 
-    fn update_selected_game(&mut self) {
-        let config = self.config.as_mut().unwrap();
-        if self.selected_game.is_none() {
-            return;
+    fn handle_config_open(&mut self, result: Result<ClientConfig, ConfigError>) -> Task<Message> {
+        self.blackboard.config = result.unwrap_or_else(|e| {
+            let error_message = match e {
+                ConfigError::DialogClosed => "Dialog closed".to_string(),
+                ConfigError::IoError(e) => format!("io error: {}", e).to_string(),
+            };
+            println!("failed to open config, recreating {}", error_message);
+            ClientConfig {
+                active_account: Default::default(),
+                accounts: vec![],
+                is_active: false,
+            }
+        });
+        if self.have_valid_config() {
+            let username_in_config = self.blackboard.config.get_username();
+            self.login.set_username(&username_in_config);
         }
-        let game = self.selected_game.as_ref().unwrap();
-        let updated_game = config
-            .get_account_games()
-            .iter()
-            .find(|x| x.name_id == game.name_id)
-            .unwrap()
-            .clone();
-        self.selected_game = Some(updated_game);
+
+        let mut fetch_games = false;
+        self.blackboard.screen = match self.have_valid_config() {
+            true if self.blackboard.config.has_session_token() => {
+                fetch_games = true;
+                Screen::Main
+            }
+            true => Screen::Login,
+            false => Screen::Wizard,
+        };
+
+        if fetch_games {
+            return tasks::perform_fetch_games_from_config(&self.blackboard.config);
+        }
+        Task::none()
     }
 
     fn logout(&mut self) {
-        self.selected_game = None;
-        self.selected_channel = None;
+        self.blackboard.selected_game = None;
+        self.blackboard.selected_channel = None;
         self.wizard.clear_input();
-        self.is_playing = false;
+        self.blackboard.is_playing = false;
 
         self.login.password_input = SecretString::new("".into());
         self.login.username_input.clear();
         self.login.error_reason = None;
 
-        self.screen = Screen::Login;
+        self.blackboard.screen = Screen::Login;
     }
 }
 
