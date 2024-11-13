@@ -3,13 +3,30 @@ use crate::Screen;
 use std::path::PathBuf;
 use std::process::Command;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Blackboard {
     pub config: ClientConfig,
     pub screen: Screen,
     pub selected_game: Option<Game>,
     pub selected_channel: Option<String>,
+    pub selected_version: Option<String>,
     pub is_playing: bool,
+}
+
+impl Blackboard {
+    pub(crate) fn set_initial_screen(&mut self) {
+        self.screen = match self.have_valid_config() {
+            true if self.config.has_session_token() => Screen::Main,
+            true => Screen::Login,
+            false => Screen::Wizard,
+        };
+    }
+}
+
+impl Blackboard {
+    pub(crate) fn have_valid_config(&self) -> bool {
+        self.config.is_active
+    }
 }
 
 impl Blackboard {

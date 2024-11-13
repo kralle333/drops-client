@@ -1,4 +1,5 @@
 use crate::blackboard::Blackboard;
+use crate::client_config::ReleaseState::Installed;
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
 use iced::Task;
@@ -15,6 +16,17 @@ impl MessageHandler for GamesMessageHandler {
                     None => game.releases.first().map(|x| x.channel_name.to_string()),
                     Some(channel) => Some(channel.to_string()),
                 };
+                let selected_channel = blackboard.selected_channel.as_ref().unwrap().to_string();
+                let mut versions_installed: Vec<String> = game
+                    .releases
+                    .iter()
+                    .filter(|x| &x.channel_name == &selected_channel)
+                    .filter(|x| x.state == Installed)
+                    .map(|x| x.version.to_string())
+                    .collect();
+                versions_installed.sort_by(|x, y| y.cmp(&x));
+                blackboard.selected_version = versions_installed.first().map(|x| x.to_string());
+
                 blackboard.selected_game = Some(game);
             }
 

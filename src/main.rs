@@ -7,6 +7,7 @@ mod errors;
 mod handlers;
 mod messages;
 mod tasks;
+mod view_utils;
 
 use crate::client_config::{ClientConfig, Game, Release, ReleaseState};
 use crate::downloading::DownloadError;
@@ -18,16 +19,19 @@ use crate::handlers::login::LoginMessageHandler;
 use crate::handlers::wizard::WizardMessageHandler;
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
+use crate::view_utils::container_with_top_bar_and_side_view;
+use anyhow::{anyhow, Context};
 use blackboard::Blackboard;
 use env_logger::Env;
 use iced::widget::{
-    button, column, container, horizontal_space, pick_list, progress_bar, row, scrollable, text,
-    text_input, vertical_space, Column, Container, TextInput,
+    button, column, container, pick_list, progress_bar, row, scrollable, text, vertical_space,
+    Column, Container,
 };
 use iced::{window, Center, Color, Element, Fill, Size, Task};
 use iced_futures::Subscription;
 use log::error;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
+use self_update::{cargo_crate_version, self_replace, version};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::default::Default;
@@ -42,12 +46,15 @@ struct DropsClient {
     login: LoginMessageHandler,
     requested_game_to_play: Option<String>,
     run_from_args_issue: RunFromArgsIssue,
+    update_client_error: String,
+    is_updating_client: bool,
 }
 
 #[derive(Default, Clone, Debug)]
 pub enum Screen {
     #[default]
     Wizard,
+    ClientUpdateAvailable(self_update::update::Release),
     Login,
     LoggingIn,
     Main,
@@ -120,190 +127,46 @@ impl DropsClient {
     }
 
     fn have_valid_config(&self) -> bool {
-        self.blackboard.config.is_active
-    }
-
-    fn login_column(&self) -> Column<Message> {
-        let options = self
-            .blackboard
-            .config
-            .accounts
-            .iter()
-            .map(|x| x.url.to_string())
-            .collect::<Vec<String>>();
-
-        let active_one = self.blackboard.config.get_active_account();
-        let default = active_one.map(|account| {
-            self.blackboard
-                .config
-                .accounts
-                .iter()
-                .find(|x| x.id == account.id)
-                .unwrap()
-                .url
-                .to_string()
-        });
-
-        let server_select = pick_list(options, default, Message::ServerChanged).width(250);
-
-        let username_input: TextInput<Message> = text_input("Username", &self.login.username_input)
-            .on_input(Message::UsernameChanged)
-            .padding(10)
-            .size(15)
-            .width(250);
-        let password_input =
-            iced::widget::text_input("Password", &self.login.password_input.expose_secret())
-                .on_input(Message::PasswordChanged)
-                .secure(true)
-                .padding(10)
-                .size(15)
-                .width(250);
-
-        let login_button = iced::widget::button(text("login").center())
-            .on_press(Message::Login)
-            .padding(10)
-            .width(200);
-
-        let new_server_button = button(text("new server").center())
-            .on_press(Message::GoToScreen(Screen::Wizard))
-            .padding(5)
-            .width(150);
-
-        let inputs = column![]
-            .push_maybe(
-                self.login
-                    .error_reason
-                    .clone()
-                    .map(|x| text(format!("{}", x)).color(Color::from_rgb(0.8, 0.4, 0.4))),
-            )
-            .push(server_select)
-            .push(username_input)
-            .push(password_input)
-            .spacing(10);
-
-        column![]
-            .push(row![horizontal_space(), inputs, horizontal_space()])
-            .spacing(10)
-            .push(vertical_space().height(5))
-            .push(row![horizontal_space(), login_button, horizontal_space()])
-            .push(vertical_space().height(10))
-            .push(row![
-                horizontal_space(),
-                new_server_button,
-                horizontal_space()
-            ])
-            .push(vertical_space().height(50))
-    }
-
-    fn wizard_column(&self) -> Column<Message> {
-        let host_input: TextInput<Message> =
-            text_input("drops server url", &self.wizard.drops_url_input)
-                .width(200)
-                .on_input(Message::DropsUrlChanged)
-                .padding(10)
-                .size(15);
-
-        let button_width = 80;
-        let button_height = 40;
-        let can_test =
-            !self.wizard.is_checking_host_reachable && !self.wizard.drops_url_input.is_empty();
-        let button_work = can_test.then_some(true);
-
-        let host_err_text = match self.wizard.has_valid_host {
-            true => text("ok").color(Color::from_rgb(0.4, 0.7, 0.4)),
-            false => text(self.wizard.host_error.to_string()).color(Color::from_rgb(0.8, 0.4, 0.4)),
-        };
-        let test_host_row = row![]
-            .push(host_input)
-            .push(
-                button(text("test").center())
-                    .on_press_maybe(button_work.map(|_| Message::TestDropsUrl))
-                    .width(button_width)
-                    .height(button_height),
-            )
-            .spacing(20)
-            .align_y(Center);
-
-        let dir_select_input = text_input("select games dir", &self.wizard.games_dir_input)
-            .width(200)
-            .padding(10)
-            .size(15);
-
-        let ok_text = match self.wizard.has_valid_games_dir {
-            true => "ok",
-            false => "",
-        };
-        let select_file_row = row![]
-            .push(dir_select_input)
-            .push(
-                button(text("open").center())
-                    .on_press(Message::SelectGamesDir)
-                    .width(button_width)
-                    .height(button_height),
-            )
-            .spacing(20)
-            .align_y(Center);
-
-        let should_show = match !(!self.wizard.has_valid_games_dir || !self.wizard.has_valid_host) {
-            true => Some(true),
-            false => None,
-        };
-        let cancel_button = match self.have_valid_config() {
-            true => Some(
-                button("cancel")
-                    .on_press(Message::GoToScreen(Screen::Login))
-                    .padding(10),
-            ),
-            false => None,
-        };
-
-        let bottom_bar = row![]
-            .push(horizontal_space())
-            .push_maybe(cancel_button)
-            .push(
-                button("continue")
-                    .on_press_maybe(should_show.map(|_| Message::FinishWizard))
-                    .padding(10),
-            )
-            .push(horizontal_space())
-            .spacing(30)
-            .align_y(Center);
-        column![
-            host_err_text,
-            test_host_row,
-            vertical_space().height(10),
-            text(ok_text).color(Color::from_rgb(0.4, 0.7, 0.4)),
-            select_file_row,
-            vertical_space().height(80),
-            bottom_bar
-        ]
-        .width(500)
-        .spacing(0)
+        self.blackboard.have_valid_config()
     }
 
     pub fn view(&self) -> Element<Message> {
-        match self.blackboard.screen {
-            Screen::Wizard | Screen::Login => {
-                let (title, col) = match self.blackboard.screen {
-                    Screen::Login => ("drops", self.login_column()),
-                    Screen::Wizard => ("welcome", self.wizard_column()),
-                    _ => ("invalid", column![]),
-                };
+        match &self.blackboard.screen {
+            Screen::Wizard => self.wizard.view(&self.blackboard),
+            Screen::Login => self.login.view(&self.blackboard),
+            Screen::ClientUpdateAvailable(new_release) => {
+                if self.is_updating_client {
+                    return view_utils::container_with_title("Updating!".to_string(), column![]);
+                }
+                if !self.update_client_error.is_empty() {
+                    return view_utils::container_with_title(
+                        "Failed to update".to_string(),
+                        column![button(text("Go to menu").center())],
+                    );
+                }
+                let buttons_row = row![]
+                    .push(
+                        button(text("cancel").size(16).center())
+                            .on_press(Message::GoToInitialScreen),
+                    )
+                    .push(
+                        button(text("update").size(16).center())
+                            .on_press(Message::UpdateClient(new_release.clone())),
+                    )
+                    .spacing(20);
 
-                // Centered box with title
-                let col = column![]
-                    .push(text(title).size(70))
-                    .width(300)
-                    .align_x(Center)
-                    .spacing(70)
-                    .push(col);
-
-                let r = row![]
-                    .push(horizontal_space())
-                    .push(col)
-                    .push(horizontal_space());
-
-                Container::new(r).center(0).width(Fill).height(Fill).into()
+                let content = column![]
+                    .push(
+                        text(format!(
+                            "{} -> {}",
+                            cargo_crate_version!(),
+                            new_release.version
+                        ))
+                        .size(32),
+                    )
+                    .push(vertical_space().height(30))
+                    .push(buttons_row);
+                view_utils::container_with_title("New version available!".to_string(), content)
             }
             Screen::LoggingIn => Container::new(column![text("logging in")
                 .size(40)
@@ -312,151 +175,108 @@ impl DropsClient {
             .into(),
             Screen::Main => {
                 match &self.run_from_args_issue {
-                    RunFromArgsIssue::Error(message) => {
-                        return container(column![].push(text(message)).push(
-                            button(text("close")).on_press(Message::ClearRequestedGameToPlay),
-                        ))
-                        .width(Fill)
-                        .height(Fill)
-                        .center(Fill)
-                        .into();
-                    }
-                    RunFromArgsIssue::FoundUpdate(game, new_release, installed_release) => {
-                        return container(
-                            column![].push(text("Found newer release, update?")).push(
-                                row![]
-                                    .push(button(text("update")).on_press(Message::Download(
-                                        game.clone(),
-                                        new_release.clone(),
-                                    )))
-                                    .push(
-                                        button(text("play"))
-                                            .on_press(Message::Run(installed_release.clone())),
-                                    )
-                                    .spacing(10),
-                            ),
-                        )
-                        .width(Fill)
-                        .height(Fill)
-                        .center(Fill)
-                        .into();
+                    RunFromArgsIssue::Error(_) | RunFromArgsIssue::FoundUpdate(..) => {
+                        return Self::display_run_from_args_issue(&self.run_from_args_issue);
                     }
                     _ => {}
                 }
-
-                let header = container(
-                    row![
-                        text(format!(
-                            "Logged in as  {}",
-                            self.blackboard.config.get_username()
-                        )),
-                        horizontal_space(),
-                        "drops",
-                        horizontal_space(),
-                        button(text("logout").center()).on_press(Message::Logout)
-                    ]
-                    .padding(10)
-                    .align_y(Center),
-                );
-
                 let games = self.blackboard.config.get_account_games();
                 let game_count = games.len();
-                let games: Element<Message> = column(games.into_iter().map(|x| {
-                    button(text(x.name.to_string()).center())
-                        .width(Fill)
-                        .on_press(Message::SelectGame(x.clone()))
-                        .into()
-                }))
-                .spacing(10)
-                .into();
-
-                let sidebar_column = column![
-                    row![
-                        horizontal_space(),
-                        text("Games").align_x(Center).size(22),
-                        horizontal_space()
-                    ],
-                    vertical_space().height(15),
-                    games,
-                    vertical_space()
-                ]
-                .padding(10)
-                .width(160);
-
-                let sidebar = container(sidebar_column)
-                    .style(container::dark)
-                    .center_y(Fill);
-
-                let download_state = match &self.blackboard.selected_game {
-                    None => DownloadState::Idle,
-                    Some(game) => {
-                        let state = self
-                            .downloading
-                            .downloads
-                            .iter()
-                            .find(|x| x.game_name_id == game.name_id);
-                        match state {
-                            None => DownloadState::Idle,
-                            Some(download) => download.state.clone(),
-                        }
-                    }
-                };
-
-                let content = container(scrollable(match &self.blackboard.selected_game {
+                let content = match &self.blackboard.selected_game {
                     None if game_count > 0 => {
                         column![text("Welcome!").size(48), "Select game to the left"]
-                            .spacing(40)
-                            .align_x(Center)
-                            .width(Fill)
                     }
                     None => column![
                         text("Welcome!").size(48),
                         "Found no games for your account, try refreshing",
                         vertical_space().height(20),
                         button("Refresh").on_press(Message::FetchGames)
-                    ]
-                    .spacing(40)
-                    .align_x(Center)
-                    .width(Fill),
-                    Some(game) => match download_state {
-                        DownloadState::Idle => self.show_game(game),
-                        DownloadState::Downloading {
-                            progress_percentage: progress,
-                        } => column![
-                            text("Downloading Release!").size(24),
-                            vertical_space().height(20),
-                            progress_bar(0.0..=100.0, progress).width(200)
-                        ]
-                        .align_x(Center)
-                        .width(Fill),
-                        DownloadState::Errored(reason) => {
-                            let reason_str = match reason {
-                                DownloadError::RequestFailed(e) => format!("request error:  {}", e),
-                                DownloadError::IoError => "io error".to_string(),
-                            };
-                            column![
-                                text(format!(
-                                    "Failed to download release with error: {}",
-                                    reason_str
-                                )),
-                                button(text("Ok").center()).on_press(Message::CloseDownloadError(
-                                    game.name_id.to_string()
-                                ))
-                            ]
-                            .spacing(40)
-                            .align_x(Center)
-                            .width(Fill)
-                            .into()
-                        }
-                    },
-                }))
-                .height(Fill)
-                .padding(10);
+                    ],
+                    Some(game) => self.display_game_with_download_state(game),
+                }
+                .align_x(Center)
+                .width(Fill);
 
-                column![header, row![sidebar, content]].into()
+                container_with_top_bar_and_side_view(content, self.blackboard.clone())
             }
         }
     }
+    fn display_run_from_args_issue(issue: &RunFromArgsIssue) -> Element<Message> {
+        match issue {
+            RunFromArgsIssue::Error(message) => container(
+                column![]
+                    .push(text(message))
+                    .push(button(text("close")).on_press(Message::ClearRequestedGameToPlay)),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .into(),
+            RunFromArgsIssue::FoundUpdate(game, new_release, installed_release) => container(
+                column![].push(text("Found newer release, update?")).push(
+                    row![]
+                        .push(
+                            button(text("update"))
+                                .on_press(Message::Download(game.clone(), new_release.clone())),
+                        )
+                        .push(
+                            button(text("play")).on_press(Message::Run(installed_release.clone())),
+                        )
+                        .spacing(10),
+                ),
+            )
+            .width(Fill)
+            .height(Fill)
+            .center(Fill)
+            .into(),
+            _ => column![].into(),
+        }
+    }
+
+    fn display_game_with_download_state(&self, game: &Game) -> Column<Message> {
+        let download_state = match &self.blackboard.selected_game {
+            None => DownloadState::Idle,
+            Some(game) => {
+                let state = self
+                    .downloading
+                    .downloads
+                    .iter()
+                    .find(|x| x.game_name_id == game.name_id);
+                match state {
+                    None => DownloadState::Idle,
+                    Some(download) => download.state.clone(),
+                }
+            }
+        };
+
+        match download_state {
+            DownloadState::Idle => self.show_game(game),
+            DownloadState::Downloading {
+                progress_percentage: progress,
+            } => column![
+                text("Downloading Release!").size(24),
+                vertical_space().height(20),
+                progress_bar(0.0..=100.0, progress.clone()).width(200)
+            ]
+            .align_x(Center)
+            .width(Fill),
+            DownloadState::Errored(reason) => {
+                let reason_str = match reason {
+                    DownloadError::RequestFailed(e) => format!("request error:  {}", e),
+                    DownloadError::IoError => "io error".to_string(),
+                };
+                column![
+                    text(format!(
+                        "Failed to download release with error: {}",
+                        reason_str
+                    )),
+                    button(text("Ok").center())
+                        .on_press(Message::CloseDownloadError(game.name_id.to_string()))
+                ]
+            }
+        }
+    }
+
     fn newest_release_by_state(
         releases: &[Release],
         channel: Option<&str>,
@@ -508,7 +328,8 @@ impl DropsClient {
                     play_button
                 }
             }
-        };
+        }
+        .width(75);
 
         let (versions, channels) =
             game.releases
@@ -526,29 +347,46 @@ impl DropsClient {
                     b.insert(c.channel_name.to_string());
                     (a, b)
                 });
+
         let mut channels = channels
             .iter()
             .map(|y| y.to_string())
             .collect::<Vec<String>>();
         channels.sort();
 
-        let dropdown = pick_list(
-            channels,
-            self.blackboard.selected_channel.as_ref(),
-            Message::ChannelChanged,
+        let dropdown_picker = self.blackboard.selected_channel.is_some().then_some(
+            pick_list(
+                channels,
+                self.blackboard.selected_channel.as_ref(),
+                Message::SelectedChannelChanged,
+            )
+            .width(100),
         );
 
-        let dropdown = match self.blackboard.selected_channel {
-            None => None,
-            Some(_) => Some(dropdown),
-        };
+        let installed_versions: Vec<String> = game
+            .releases
+            .iter()
+            .filter(|x| &x.channel_name == channel)
+            .filter(|x| x.state == ReleaseState::Installed)
+            .map(|x| x.version.to_string())
+            .collect();
+
+        let installed_versions_picker = installed_versions.len().gt(&0).then_some(
+            pick_list(
+                installed_versions,
+                self.blackboard.selected_version.as_ref(),
+                Message::SelectedVersionChanged,
+            )
+            .width(100),
+        );
 
         let buttons = row![]
             .push(option_button)
-            .push_maybe(dropdown)
+            .push_maybe(dropdown_picker)
+            .push_maybe(installed_versions_picker)
             .padding(10)
-            .spacing(10)
-            .width(200);
+            .spacing(20)
+            .width(300);
 
         let mut versions: Vec<(String, String)> = versions.into_iter().map(|x| x).collect();
         versions.sort_by(|(_, x), (_, y)| y.cmp(x));
@@ -561,27 +399,35 @@ impl DropsClient {
             })
             .spacing(10);
 
-        column![
-            text(game.name.to_string())
-                .size(32)
-                .width(450)
-                .align_x(Center),
-            vertical_space().height(3),
-            row![buttons],
-            vertical_space().height(20),
-            text("Description").size(20),
-            vertical_space().height(2),
-            text(game.description.to_string())
-                .size(14)
-                .width(450)
-                .align_x(Center),
-            vertical_space().height(15),
-            text("Releases").size(20),
-            vertical_space().height(2),
-            scrollable(versions).width(400)
-        ]
-        .align_x(Center)
+        let c = Container::new(
+            column![
+                text(game.name.to_string())
+                    .size(32)
+                    .width(450)
+                    .align_x(Center),
+                vertical_space().height(3),
+                column![buttons].align_x(Center),
+                vertical_space().height(20),
+                text("Description").size(20),
+                vertical_space().height(2),
+                text(game.description.to_string())
+                    .size(14)
+                    .width(450)
+                    .align_x(Center),
+                vertical_space().height(15),
+                text("Releases").size(20),
+                vertical_space().height(2),
+            ]
+            .align_x(Center)
+            .width(Fill),
+        )
         .width(Fill)
+        .height(210);
+
+        column![c, scrollable(versions).width(400)]
+
+        //
+        //    scrollable(versions).width(400)
     }
 
     fn handle_args_game_running(&mut self) -> RunFromArgsIssue {
@@ -644,6 +490,17 @@ impl DropsClient {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::UpdateClient(release) => {
+                self.is_updating_client = true;
+                let result = Self::download_newer_version_and_replace(release);
+                match result {
+                    Ok(_) => {}
+                    Err(e) => {
+                        self.is_updating_client = false;
+                        self.update_client_error = e.to_string();
+                    }
+                }
+            }
             Message::ClearRequestedGameToPlay => self.requested_game_to_play = None,
             Message::GoToScreen(screen) => {
                 self.blackboard.screen = screen;
@@ -682,11 +539,16 @@ impl DropsClient {
             Message::ConfigOpened(result) => {
                 return self.handle_config_open(result);
             }
-
             Message::FetchGames => {
-                return tasks::perform_fetch_games_from_config(&self.blackboard.config);
+                return tasks::perform_fetch_games_from_config(&self.blackboard.config)
             }
+            Message::GoToInitialScreen => {
+                self.blackboard.set_initial_screen();
 
+                if self.blackboard.config.has_session_token() {
+                    return tasks::perform_fetch_games_from_config(&self.blackboard.config);
+                }
+            }
             Message::GamesFetched(Err(e)) => {
                 match e {
                     FetchGamesError::APIError(ref inner) => {
@@ -717,8 +579,11 @@ impl DropsClient {
                 }
             }
 
-            Message::ChannelChanged(channel_name) => {
+            Message::SelectedChannelChanged(channel_name) => {
                 self.blackboard.selected_channel = Some(channel_name);
+            }
+            Message::SelectedVersionChanged(version) => {
+                self.blackboard.selected_version = Some(version);
             }
         }
         Task::none()
@@ -741,21 +606,81 @@ impl DropsClient {
             let username_in_config = self.blackboard.config.get_username();
             self.login.set_username(&username_in_config);
         }
+        self.blackboard.set_initial_screen();
 
-        let mut fetch_games = false;
-        self.blackboard.screen = match self.have_valid_config() {
-            true if self.blackboard.config.has_session_token() => {
-                fetch_games = true;
-                Screen::Main
+        match Self::look_for_newer_version() {
+            Ok(Some(newer_version)) => {
+                self.blackboard.screen = Screen::ClientUpdateAvailable(newer_version);
             }
-            true => Screen::Login,
-            false => Screen::Wizard,
-        };
+            Ok(_) | Err(_) => {}
+        }
 
-        if fetch_games {
+        if self.have_valid_config() && self.blackboard.config.has_session_token() {
             return tasks::perform_fetch_games_from_config(&self.blackboard.config);
         }
         Task::none()
+    }
+
+    fn download_newer_version_and_replace(
+        release: self_update::update::Release,
+    ) -> Result<(), anyhow::Error> {
+        // get the first available release
+        let asset = release.asset_for(default_platform(), None).unwrap();
+
+        println!("creating temp dirs");
+        let cur_dir = env::current_dir().context("getting cur dir")?;
+        let tmp_dir = tempfile::Builder::new()
+            .prefix("self_update")
+            .tempdir_in(cur_dir)
+            .context("creating temp dir")?;
+        let tmp_zip_path = tmp_dir.path().join(&asset.name);
+        let tmp_zip = std::fs::File::create(&tmp_zip_path).context("opening zip file")?;
+
+        println!("downloading");
+        self_update::Download::from_url(&asset.download_url)
+            .set_header(reqwest::header::ACCEPT, "application/octet-stream".parse()?)
+            .download_to(&tmp_zip)?;
+
+        let bin_name_suffix = match default_platform() {
+            "windows" => ".exe",
+            _ => "",
+        };
+        println!("updating!");
+        let bin_name = std::path::PathBuf::from(format!("drops-client{}", bin_name_suffix));
+        println!("using binname: {}", bin_name.to_str().unwrap_or(""));
+        self_update::Extract::from_source(&tmp_zip_path)
+            .archive(self_update::ArchiveKind::Zip)
+            .extract_file(tmp_dir.path(), &bin_name)?;
+        println!("replacing!");
+
+        let new_exe = tmp_dir.path().join(bin_name);
+        self_replace::self_replace(new_exe)?;
+
+        Ok(())
+    }
+    fn look_for_newer_version() -> Result<Option<self_update::update::Release>, anyhow::Error> {
+        let releases = self_update::backends::github::ReleaseList::configure()
+            .repo_owner("kralle333")
+            .repo_name("drops-client")
+            .build()?
+            .fetch()?;
+        println!("found releases:");
+        println!("{:#?}\n", releases);
+
+        if releases.is_empty() {
+            return Ok(None);
+        }
+
+        let newer = releases.into_iter().nth(0).unwrap();
+        let newer_version = newer.version.to_string();
+
+        let current = cargo_crate_version!();
+        if version::bump_is_greater(current, &newer_version).map(|x| !x)? {
+            println!("no updates");
+            return Err(anyhow!("no update"));
+        }
+
+        Ok(Some(newer))
     }
 
     fn logout(&mut self) {

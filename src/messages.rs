@@ -22,14 +22,17 @@ pub enum Message {
     TestDropsUrl,
 
     WizardCanReachHostChecked(Result<(), String>),
-    ChannelChanged(String),
+    SelectedChannelChanged(String),
     ServerChanged(String),
     SelectGamesDir,
     FinishWizard,
 
     GoToScreen(Screen),
+    GoToInitialScreen,
+    UpdateClient(self_update::update::Release),
     DownloadProgressing((String, Result<DownloadProgress, DownloadError>)),
     CloseDownloadError(String),
     Logout,
     ClearRequestedGameToPlay,
+    SelectedVersionChanged(String),
 }
