@@ -140,7 +140,6 @@ impl Download {
 
 #[derive(Debug, Clone)]
 pub enum DownloadState {
-    Idle,
     Downloading { progress_percentage: f32 },
     Errored(DownloadError),
 }
@@ -171,7 +170,6 @@ impl DownloadMessageHandler {
 
         let displayed_download = displayed_download.unwrap();
         match &displayed_download.state {
-            DownloadState::Idle => column![],
             DownloadState::Downloading {
                 progress_percentage: progress,
             } => iced::widget::column![
