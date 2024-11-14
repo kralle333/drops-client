@@ -1,6 +1,6 @@
 use crate::errors::LoginError::{APIError, BadCredentials, MissingSessionToken};
 use crate::errors::{FetchGamesError, LoginError};
-use crate::{default_platform, SessionToken};
+use crate::{utils, SessionToken};
 use drops_messages::requests::{GetGamesRequest, GetGamesResponse};
 use reqwest::redirect::Policy;
 use reqwest::{Client, ClientBuilder, StatusCode};
@@ -57,7 +57,7 @@ pub async fn fetch_games(
     session_token: SessionToken,
 ) -> Result<GetGamesResponse, FetchGamesError> {
     let req = GetGamesRequest {
-        platform: Some(default_platform().into()),
+        platform: Some(utils::default_platform().into()),
     };
 
     let client = build_client();
@@ -110,7 +110,7 @@ pub fn unzip_file(
         {
             use std::os::unix::fs::PermissionsExt;
             if let Some(mode) = file.unix_mode() {
-                std::fs::set_permissions(&outpath, std::fs::Permissions::from_mode(mode))?;
+                fs::set_permissions(&outpath, fs::Permissions::from_mode(mode))?;
             }
         }
     }

@@ -1,6 +1,5 @@
 use crate::client_config::{ClientConfig, Game, Release};
-use crate::Screen;
-use std::path::PathBuf;
+use crate::{utils, Screen};
 use std::process::Command;
 
 #[derive(Default, Clone)]
@@ -46,11 +45,8 @@ impl Blackboard {
     }
 
     pub fn run_release(&mut self, game_name_id: &str, release: &Release) {
-        let executable_dir = PathBuf::new()
-            .join(self.config.get_games_dir())
-            .join(game_name_id)
-            .join(&release.channel_name)
-            .join(&release.version);
+        let executable_dir =
+            utils::get_exe_path(&self.config.get_games_dir(), game_name_id, release);
 
         let executable_path = executable_dir.join(&release.executable_path);
         let mut child = Command::new(&executable_path)

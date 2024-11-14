@@ -1,5 +1,6 @@
+use crate::client_config::ReleaseState::{Installed, NotInstalled};
 use crate::errors::ConfigError;
-use crate::SessionToken;
+use crate::{utils, SessionToken};
 use anyhow::{anyhow, Error};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
@@ -47,7 +48,7 @@ pub struct DropsAccountConfig {
     pub games: Vec<Game>,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Debug, Clone)]
+#[derive(serde::Deserialize, serde::Serialize, Default, Debug, Clone)]
 pub struct Game {
     pub name: String,
     pub name_id: String,
@@ -254,6 +255,15 @@ impl DropsAccountConfig {
         patched_game.releases = new.iter().map(|x| Self::create_new_release(x)).collect();
 
         patched_game.releases.extend(existing_game.releases);
+
+        for release in patched_game.releases.iter_mut() {
+            let path = utils::get_exe_path(&self.games_dir, &patched_game.name_id, release)
+                .join(&release.executable_path);
+            release.state = match path.exists() {
+                true => Installed,
+                false => NotInstalled,
+            };
+        }
 
         match self
             .games

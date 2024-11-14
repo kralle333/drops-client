@@ -7,6 +7,13 @@ use iced::{Center, Element};
 use iced_futures::core::Length::Fill;
 use self_update::cargo_crate_version;
 
+pub fn centered_container(content: Element<Message>) -> Element<Message> {
+    container(content)
+        .width(Fill)
+        .height(Fill)
+        .center(Fill)
+        .into()
+}
 pub fn container_with_title(title: String, content: Column<Message>) -> Element<Message> {
     let col = column![]
         .push(vertical_space().height(40))
@@ -28,16 +35,14 @@ pub fn container_with_title(title: String, content: Column<Message>) -> Element<
         .into()
 }
 
-pub fn container_with_top_bar_and_side_view(
-    content: Column<Message>,
-    blackboard: Blackboard,
-) -> Element<Message> {
+pub fn container_with_top_bar_and_side_view<'a, 'b>(
+    content: Container<'a, Message>,
+    blackboard: &'b Blackboard,
+) -> Element<'a, Message> {
+    let config = &blackboard.config;
     let header = container(
         row![
-            text(format!(
-                "Logged in as  {}",
-                blackboard.config.get_username()
-            )),
+            text(format!("Logged in as  {}", config.get_username())),
             horizontal_space(),
             column!["drops", cargo_crate_version!()],
             horizontal_space(),
@@ -47,7 +52,7 @@ pub fn container_with_top_bar_and_side_view(
         .align_y(Center),
     );
 
-    let games = blackboard.config.get_account_games();
+    let games = config.get_account_games();
     let games: Element<Message> = column(games.into_iter().map(|x| {
         button(text(x.name.to_string()).center())
             .width(Fill)
@@ -76,7 +81,13 @@ pub fn container_with_top_bar_and_side_view(
 
     column![
         header,
-        row![sidebar, container(content).height(Fill).padding(10)]
+        row![
+            sidebar,
+            container(content.align_x(Center))
+                .width(Fill)
+                .height(Fill)
+                .padding(10)
+        ]
     ]
     .into()
 }

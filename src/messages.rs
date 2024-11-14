@@ -1,8 +1,8 @@
 use crate::client_config::{ClientConfig, Game, Release};
-use crate::downloading::{DownloadError, DownloadProgress};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
 use crate::{Screen, SessionToken};
 use drops_messages::requests::GetGamesResponse;
+use crate::handlers::download::{DownloadError, DownloadProgress};
 
 #[derive(Debug, Clone)]
 pub enum Message {

@@ -1,11 +1,10 @@
 use crate::blackboard::Blackboard;
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
-use crate::Screen::LoggingIn;
 use crate::{tasks, view_utils, Screen};
 use iced::widget::{
     button, column, horizontal_space, pick_list, row, text, text_input, vertical_space, Column,
-    TextInput,
+    Container, TextInput,
 };
 use iced::{Color, Element, Task};
 use log::error;
@@ -23,7 +22,18 @@ impl LoginMessageHandler {
         self.username_input = username.to_string();
     }
     pub fn view(&self, blackboard: &Blackboard) -> Element<Message> {
-        view_utils::container_with_title("drops".to_string(), self.login_column(blackboard)).into()
+        match blackboard.screen {
+            Screen::Login => {
+                view_utils::container_with_title("drops".to_string(), self.login_column(blackboard))
+                    .into()
+            }
+            Screen::LoggingIn => Container::new(column![text("logging in")
+                .size(40)
+                .color(Color::parse("#417495").unwrap())])
+            .center(0)
+            .into(),
+            _ => column![].into(),
+        }
     }
     fn login_column(&self, blackboard: &Blackboard) -> Column<Message> {
         let options = blackboard
@@ -100,7 +110,7 @@ impl MessageHandler for LoginMessageHandler {
     fn update(&mut self, message: Message, blackboard: &mut Blackboard) -> Task<Message> {
         match message {
             Message::Login => {
-                blackboard.screen = LoggingIn;
+                blackboard.screen = Screen::LoggingIn;
                 let url = blackboard.config.get_drops_url();
                 return tasks::perform_login(
                     &url,
