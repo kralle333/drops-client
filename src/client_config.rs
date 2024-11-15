@@ -1,4 +1,3 @@
-use crate::client_config::ReleaseState::{Installed, NotInstalled};
 use crate::errors::ConfigError;
 use crate::{utils, SessionToken};
 use anyhow::{anyhow, Error};
@@ -257,11 +256,16 @@ impl DropsAccountConfig {
         patched_game.releases.extend(existing_game.releases);
 
         for release in patched_game.releases.iter_mut() {
-            let path = utils::get_exe_path(&self.games_dir, &patched_game.name_id, release)
-                .join(&release.executable_path);
+            let path = utils::get_exe_path(
+                &self.games_dir,
+                &patched_game.name_id,
+                &release.channel_name,
+                &release.version,
+            )
+            .join(&release.executable_path);
             release.state = match path.exists() {
-                true => Installed,
-                false => NotInstalled,
+                true => ReleaseState::Installed,
+                false => ReleaseState::NotInstalled,
             };
         }
 

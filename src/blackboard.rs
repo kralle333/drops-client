@@ -45,8 +45,12 @@ impl Blackboard {
     }
 
     pub fn run_release(&mut self, game_name_id: &str, release: &Release) {
-        let executable_dir =
-            utils::get_exe_path(&self.config.get_games_dir(), game_name_id, release);
+        let executable_dir = utils::get_exe_path(
+            &self.config.get_games_dir(),
+            game_name_id,
+            &release.channel_name,
+            &release.version,
+        );
 
         let executable_path = executable_dir.join(&release.executable_path);
         let mut child = Command::new(&executable_path)

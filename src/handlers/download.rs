@@ -13,7 +13,7 @@ use iced_futures::Subscription;
 use log::error;
 use std::fs;
 use std::io::Cursor;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use zip::ZipArchive;
 
@@ -150,6 +150,28 @@ pub struct DownloadMessageHandler {
 }
 
 impl DownloadMessageHandler {
+    #[cfg(windows)]
+    fn create_windows_start_menu_entry(executable_path: &Path) -> Result<(), anyhow::Error> {
+        let Ok(app_path) = std::env::var("APPDATA") else {
+            return Err(anyhow::anyhow!(
+                "unable to find $APPDATA, are you on windows?"
+            ));
+        };
+        if app_path.is_empty() {
+            return Err(anyhow::anyhow!("found $APPDATA, but its empty?"));
+        }
+
+        let start_menu_path = PathBuf::new()
+            .join(&app_path)
+            .join(r"\Microsoft\Windows\Start Menu\Programs\drops");
+        let sl = mslnk::ShellLink::new(&executable_path)?;
+        sl.create_lnk(&start_menu_path).map_err(|x| x.into())
+    }
+    #[cfg(unix)]
+    fn create_linux_desktop_entry(_executable_path: &Path) -> Result<(), anyhow::Error> {
+        Ok(())
+    }
+
     pub fn view(&self, blackboard: &Blackboard) -> Element<Message> {
         let displayed_download = match &blackboard.selected_game {
             None => None,
@@ -229,8 +251,24 @@ impl MessageHandler for DownloadMessageHandler {
                         //TODO: Display error
                         error!("failed to update config install state");
                     }
-                    blackboard.config.save().expect("failed to save config!");
                     blackboard.update_selected_game();
+                    blackboard.config.save().expect("failed to save config!");
+                    let executable_path = utils::get_exe_path(
+                        &blackboard.config.get_games_dir(),
+                        &release.game_name_id,
+                        &release.channel_name,
+                        &release.version,
+                    );
+
+                    #[cfg(windows)]
+                    if let Err(e) = Self::create_windows_start_menu_entry(&executable_path) {
+                        println!("failed to create windows start menu entry: {}", e);
+                    }
+
+                    #[cfg(unix)]
+                    if let Err(e) = Self::create_linux_desktop_entry(&executable_path) {
+                        println!("failed to create linux desktop entry: {}", e);
+                    }
 
                     self.downloads.retain(|x| x.game_name_id != id);
                 }

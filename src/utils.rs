@@ -1,14 +1,20 @@
 use crate::client_config::{Release, ReleaseState};
 use anyhow::anyhow;
+use self_update::backends::github;
 use self_update::{cargo_crate_version, version};
 use std::path::PathBuf;
 
-pub fn get_exe_path(games_dir: &str, game_name_id: &str, release: &Release) -> PathBuf {
+pub fn get_exe_path(
+    games_dir: &str,
+    game_name_id: &str,
+    channel_name: &str,
+    version: &str,
+) -> PathBuf {
     PathBuf::new()
         .join(games_dir)
         .join(game_name_id)
-        .join(&release.channel_name)
-        .join(&release.version)
+        .join(&channel_name)
+        .join(&version)
 }
 
 pub fn newest_release_by_state(
@@ -38,7 +44,7 @@ pub fn default_platform() -> &'static str {
 }
 
 pub fn look_for_newer_version() -> Result<Option<self_update::update::Release>, anyhow::Error> {
-    let releases = self_update::backends::github::ReleaseList::configure()
+    let releases = github::ReleaseList::configure()
         .repo_owner("kralle333")
         .repo_name("drops-client")
         .build()?
