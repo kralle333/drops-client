@@ -56,6 +56,7 @@ pub struct Game {
     pub orphaned: bool,
     pub selected_channel: Option<String>,
     pub releases: Vec<Release>,
+    pub has_app_link: Option<PathBuf>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, PartialEq, Debug, Clone)]
@@ -220,6 +221,7 @@ impl DropsAccountConfig {
             releases,
             orphaned: false,
             selected_channel,
+            has_app_link: None,
         };
 
         self.games.push(stored_game);
@@ -238,6 +240,7 @@ impl DropsAccountConfig {
             orphaned: false,
             selected_channel: existing_game.selected_channel,
             releases: vec![],
+            has_app_link: existing_game.has_app_link,
         };
 
         let new: Vec<_> = game_info

@@ -5,6 +5,7 @@ use crate::client_config::{ClientConfig, Game, Release};
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
 use crate::{utils, SessionToken};
+use anyhow::Error;
 use futures_util::{SinkExt, Stream, StreamExt};
 use iced::widget::{button, column, progress_bar, text, vertical_space};
 use iced::{Center, Element, Fill, Task};
@@ -151,7 +152,7 @@ pub struct DownloadMessageHandler {
 
 impl DownloadMessageHandler {
     #[cfg(windows)]
-    fn create_windows_start_menu_entry(executable_path: &Path) -> Result<(), anyhow::Error> {
+    fn create_windows_start_menu_entry(executable_path: &Path) -> Result<PathBuf, anyhow::Error> {
         let Ok(app_path) = std::env::var("APPDATA") else {
             return Err(anyhow::anyhow!(
                 "unable to find $APPDATA, are you on windows?"
@@ -165,11 +166,12 @@ impl DownloadMessageHandler {
             .join(&app_path)
             .join(r"\Microsoft\Windows\Start Menu\Programs\drops");
         let sl = mslnk::ShellLink::new(&executable_path)?;
-        sl.create_lnk(&start_menu_path).map_err(|x| x.into())
+        sl.create_lnk(&start_menu_path).map_err(|x| x.into());
+        Ok(start_menu_path)
     }
     #[cfg(unix)]
-    fn create_linux_desktop_entry(_executable_path: &Path) -> Result<(), anyhow::Error> {
-        Ok(())
+    fn create_linux_desktop_entry(_executable_path: &Path) -> Result<String, anyhow::Error> {
+        Ok(String::new())
     }
 
     pub fn view(&self, blackboard: &Blackboard) -> Element<Message> {
@@ -253,21 +255,34 @@ impl MessageHandler for DownloadMessageHandler {
                     }
                     blackboard.update_selected_game();
                     blackboard.config.save().expect("failed to save config!");
-                    let executable_path = utils::get_exe_path(
-                        &blackboard.config.get_games_dir(),
-                        &release.game_name_id,
-                        &release.channel_name,
-                        &release.version,
-                    );
+                    let game = blackboard.selected_game.as_mut().unwrap();
+                    if game.has_app_link.is_none() {
+                        let executable_path = utils::get_exe_path(
+                            &blackboard.config.get_games_dir(),
+                            &release.game_name_id,
+                            &release.channel_name,
+                            &release.version,
+                        );
 
-                    #[cfg(windows)]
-                    if let Err(e) = Self::create_windows_start_menu_entry(&executable_path) {
-                        println!("failed to create windows start menu entry: {}", e);
-                    }
+                        #[cfg(windows)]
+                        match Self::create_windows_start_menu_entry(&executable_path) {
+                            Ok(path) => {
+                                game.has_app_link = Some(path);
+                                blackboard.config.save().expect("failed to save config!");
+                            }
+                            Err(e) => {
+                                println!("failed to create windows start menu entry: {}", e);
+                            }
+                        }
+                        #[cfg(windows)]
+                        if let Err(e) = Self::create_windows_start_menu_entry(&executable_path) {
+                            println!("failed to create windows start menu entry: {}", e);
+                        }
 
-                    #[cfg(unix)]
-                    if let Err(e) = Self::create_linux_desktop_entry(&executable_path) {
-                        println!("failed to create linux desktop entry: {}", e);
+                        #[cfg(unix)]
+                        if let Err(e) = Self::create_linux_desktop_entry(&executable_path) {
+                            println!("failed to create linux desktop entry: {}", e);
+                        }
                     }
 
                     self.downloads.retain(|x| x.game_name_id != id);
