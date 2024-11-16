@@ -23,7 +23,7 @@ use env_logger::Env;
 use iced::widget::{button, column, row, text, vertical_space};
 use iced::{window, Center, Element, Size, Task};
 use iced_futures::Subscription;
-use log::error;
+use log::{error, info};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::default::Default;
@@ -51,6 +51,7 @@ pub enum Screen {
     LoggingIn,
     Downloading,
     Main,
+    Error(String),
 }
 
 #[derive(Default)]
@@ -126,6 +127,15 @@ impl DropsClient {
                 }
                 self.gaming.view(&self.blackboard)
             }
+            Screen::Error(message) => view_utils::container_with_title(
+                "Error".to_string(),
+                column![]
+                    .push(vertical_space())
+                    .push(text(message).size(28).width(300))
+                    .push(vertical_space().height(20))
+                    .push(button(text("close")).on_press(Message::CloseError))
+                    .push(vertical_space()),
+            ),
         }
     }
 
@@ -221,6 +231,7 @@ impl DropsClient {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::CloseError => self.blackboard.screen = Screen::Main,
             Message::UpdateClient(_) => {
                 return self.client_updating.update(message, &mut self.blackboard)
             }

@@ -35,4 +35,5 @@ pub enum Message {
     Logout,
     ClearRequestedGameToPlay,
     SelectedVersionChanged(String),
+    CloseError,
 }
