@@ -5,7 +5,7 @@ use crate::client_config::{ClientConfig, Game, Release};
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
 use crate::{utils, Screen, SessionToken};
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use futures_util::{SinkExt, Stream, StreamExt};
 use iced::widget::{button, column, progress_bar, text, vertical_space};
 use iced::{Center, Element, Fill, Task};
@@ -13,7 +13,8 @@ use iced_futures::stream::try_channel;
 use iced_futures::Subscription;
 use log::error;
 use std::fs;
-use std::io::Cursor;
+use std::fs::File;
+use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use zip::ZipArchive;
@@ -186,8 +187,31 @@ impl DownloadMessageHandler {
         Ok(link_file_path)
     }
     #[cfg(unix)]
-    fn create_linux_desktop_entry(_executable_path: &Path) -> Result<String, anyhow::Error> {
-        Ok(String::new())
+    fn create_linux_desktop_entry(
+        game_name_id: &str,
+        game_name: &str,
+    ) -> Result<PathBuf, anyhow::Error> {
+        let apps_path = PathBuf::new()
+            .join(shellexpand::full("~")?.to_string())
+            .join(".local")
+            .join("share")
+            .join("applications");
+        let file_path = apps_path.join(format!("{}.desktop", game_name));
+
+        let content = format!(
+            r#"[Desktop Entry]
+Name={}
+Comment=Play this game on drops
+Exec=drops-client {}
+Terminal=false
+Type=Application
+Categories=Game;"#,
+            game_name, game_name_id
+        );
+        let mut desktop_entry = File::create(&file_path)?;
+        desktop_entry.write_all(content.as_bytes())?;
+
+        Ok(file_path)
     }
 
     pub fn view(&self, blackboard: &Blackboard) -> Element<Message> {
@@ -213,7 +237,7 @@ impl DownloadMessageHandler {
             DownloadState::Downloading {
                 progress_percentage: progress,
             } => iced::widget::column![
-                vertical_space().height(20),
+                vertical_space().height(150),
                 text("Downloading Release").size(24),
                 vertical_space().height(50),
                 text(format!("{:.1}%", progress)).size(14).align_x(Center),
@@ -298,7 +322,7 @@ impl MessageHandler for DownloadMessageHandler {
                     }
 
                     #[cfg(unix)]
-                    if let Err(e) = Self::create_linux_desktop_entry(&executable_path) {
+                    if let Err(e) = Self::create_linux_desktop_entry(&game.name_id, &game.name) {
                         println!("failed to create linux desktop entry: {}", e);
                     }
                 }
