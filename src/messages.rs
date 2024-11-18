@@ -1,7 +1,7 @@
-use crate::client_config::{ClientConfig, Game, Release};
+use crate::client_config::{ClientConfig, Game, Release, SessionToken};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
 use crate::handlers::download::{DownloadError, DownloadProgress};
-use crate::{Screen, SessionToken};
+use crate::Screen;
 use drops_messages::requests::GetGamesResponse;
 
 #[derive(Debug, Clone)]

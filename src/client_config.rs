@@ -1,11 +1,13 @@
 use crate::errors::ConfigError;
-use crate::{utils, SessionToken};
+use crate::utils;
 use anyhow::{anyhow, Error};
 use chrono::{DateTime, Utc};
 use directories::ProjectDirs;
 use drops_messages::requests::{GameInfoResponse, GetGamesResponse, ReleaseInfoResponse};
+use serde::{Deserialize, Serialize};
 use serde_json::from_str;
 use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -28,6 +30,27 @@ pub fn ensure_path() {
 
     if !path.exists() {
         std::fs::create_dir_all(&path).expect("failed to create config dir");
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct SessionToken(String);
+
+impl SessionToken {
+    pub fn parse(s: &str) -> SessionToken {
+        SessionToken(
+            s.split(';')
+                .find(|part| part.trim_start().starts_with("id="))
+                .unwrap_or("")
+                .trim()
+                .to_string(),
+        )
+    }
+}
+
+impl Display for SessionToken {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

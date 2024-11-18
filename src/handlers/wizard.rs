@@ -2,7 +2,7 @@ use crate::api::can_reach_host;
 use crate::blackboard::Blackboard;
 use crate::client_config::DropsAccountConfig;
 use crate::messages::Message;
-use crate::{view_utils, Screen, SessionToken};
+use crate::{view_utils, Screen};
 use iced::widget::{
     button, column, horizontal_space, row, text, text_input, vertical_space, Column,
 };
@@ -145,7 +145,7 @@ impl WizardMessageHandler {
                     url: self.drops_url_input.to_string(),
                     games_dir: self.games_dir_input.to_string(),
                     username: "".to_string(),
-                    session_token: SessionToken("".to_string()),
+                    session_token: Default::default(),
                     games: vec![],
                 };
                 blackboard.config.is_active = true;

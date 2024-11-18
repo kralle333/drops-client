@@ -1,10 +1,10 @@
 use crate::api::{unzip_file, InstalledRelease};
 use crate::blackboard::Blackboard;
 use crate::client_config::ReleaseState::Installed;
-use crate::client_config::{ClientConfig, Game, Release};
+use crate::client_config::{ClientConfig, Game, Release, SessionToken};
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
-use crate::{utils, Screen, SessionToken};
+use crate::{utils, Screen};
 use futures_util::{SinkExt, Stream, StreamExt};
 use iced::widget::{button, column, progress_bar, text, vertical_space};
 use iced::{Center, Element, Fill, Task};
@@ -84,7 +84,7 @@ impl Download {
             .join(&self.channel_name)
             .join(&self.version);
         info!("Downloading {}", output_dir.display());
-        let token = self.session_token.0.to_string();
+        let token = self.session_token.to_string();
         let release = InstalledRelease {
             game_name_id: self.game_name_id.to_string(),
             version: self.version.to_string(),
@@ -300,6 +300,9 @@ impl MessageHandler for DownloadMessageHandler {
                             Screen::Error("failed to update config install state".to_string());
                     }
                     blackboard.update_selected_game();
+                    if blackboard.selected_version.is_none() {
+                        blackboard.selected_version = Some(release.version);
+                    }
                     blackboard.config.save().expect("failed to save config!");
 
                     blackboard.screen = Screen::Main;

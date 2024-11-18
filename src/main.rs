@@ -4,6 +4,7 @@ mod blackboard;
 mod client_config;
 mod errors;
 mod handlers;
+mod ipc;
 mod messages;
 mod tasks;
 mod utils;
@@ -18,19 +19,14 @@ use crate::handlers::login::LoginMessageHandler;
 use crate::handlers::wizard::WizardMessageHandler;
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
-use anyhow::anyhow;
 use blackboard::Blackboard;
 use env_logger::Env;
 use fs2::FileExt;
-use futures_util::SinkExt;
-use iced::futures::Stream;
 use iced::widget::{button, column, row, text, vertical_space};
 use iced::{window, Center, Element, Size, Task};
-use iced_futures::{stream, Subscription};
-use ipc_channel::ipc::{IpcOneShotServer, IpcSender};
+use iced_futures::Subscription;
 use log::{error, info};
 use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
 use std::default::Default;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -72,21 +68,6 @@ enum RunFromArgsIssue {
     FoundUpdate(Game, Release, Release),
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct SessionToken(String);
-
-impl SessionToken {
-    pub fn parse(s: &str) -> SessionToken {
-        SessionToken(
-            s.split(';')
-                .find(|part| part.trim_start().starts_with("id="))
-                .unwrap_or("")
-                .trim()
-                .to_string(),
-        )
-    }
-}
-
 impl DropsClient {
     pub fn new() -> (Self, Task<Message>) {
         let mut client = DropsClient { ..Self::default() };
@@ -113,47 +94,7 @@ impl DropsClient {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([
-            Subscription::run_with_id("ipc", Self::handle_other_clients_opening()),
-            self.downloading.subscription(),
-        ])
-    }
-
-    fn handle_other_clients_opening() -> impl Stream<Item = Message> {
-        stream::channel(1, |mut output| async move {
-            let mut lock_file = LockFileWithDrop::new();
-            loop {
-                let result = IpcOneShotServer::new();
-
-                let Ok((server, server_name)) = result else {
-                    info!(
-                        "failed to create oneshot server: {}",
-                        result.err().unwrap().to_string()
-                    );
-                    return;
-                };
-
-                info!("created server");
-                let msg = lock_file.write_server_name_lock(&server_name);
-                if msg.is_err() {
-                    info!(
-                        "Failed to write server name {}: {:?}",
-                        server_name,
-                        msg.err()
-                    )
-                }
-
-                info!("lets accept the server!");
-                let result = tokio::task::spawn_blocking(move || server.accept()).await;
-                if let Ok((_, message)) = result.unwrap() {
-                    info!("Received message: {}", message);
-                    output
-                        .send(Message::IpcArgs(message))
-                        .await
-                        .expect("failed to send args");
-                }
-            }
-        })
+        Subscription::batch([ipc::subscription(), self.downloading.subscription()])
     }
 
     fn have_valid_config(&self) -> bool {
@@ -441,11 +382,25 @@ impl LockFileWithDrop {
             .open(Self::lock_file_path())
             .expect("Failed to open or create lock file.");
 
+        file.lock_exclusive().expect("Failed to lock lock file.");
         Box::new(Self {
             lock_file: file,
             path: Self::lock_file_path(),
         })
     }
+
+    pub fn has_lock() -> bool {
+        Self::lock_file_path().exists()
+    }
+
+    pub fn get_server_name() -> String {
+        let mut server_name = String::new();
+        let _ = File::open(Self::lock_file_path())
+            .unwrap()
+            .read_to_string(&mut server_name);
+        server_name
+    }
+
     fn write_server_name_lock(&mut self, name: &str) -> Result<(), anyhow::Error> {
         info!("Writing server name to file: {}", name);
         self.lock_file.unlock()?;
@@ -472,36 +427,9 @@ impl Drop for LockFileWithDrop {
 
 fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
-    {
-        /* TODO: Race condition: there is a gap between here
-        and the next lock where potentially multiple clients can spawn */
-        let mut lock_file = LockFileWithDrop::new();
 
-        if lock_file.lock_file.try_lock_exclusive().is_err() {
-            let args: Vec<String> = env::args().skip(1).collect();
-            if args.len() > 1 {
-                return Err(anyhow!("invalid number of arguments!"));
-            }
-            // no arguments, just ignore
-            if args.len() != 1 {
-                return Ok(());
-            }
-            // let's send this argument to the running instance
-            if let Some(arg) = args.iter().nth(0) {
-                let mut server_name = String::new();
-                let _ = lock_file.lock_file.read_to_string(&mut server_name);
-                if let Ok(sender) = IpcSender::<String>::connect(server_name) {
-                    sender
-                        .send(arg.to_string())
-                        .expect("Failed to send arguments.");
-                    info!("Arguments sent successfully.");
-                } else {
-                    info!("Failed to connect to the running instance.");
-                }
-            }
-
-            return Ok(());
-        }
+    if LockFileWithDrop::has_lock() {
+        return ipc::try_send_args();
     }
 
     info!("No running instance found. Starting a new one...");

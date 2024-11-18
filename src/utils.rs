@@ -1,9 +1,9 @@
 use crate::client_config::{Release, ReleaseState};
 use anyhow::anyhow;
+use log::info;
 use self_update::backends::github;
 use self_update::{cargo_crate_version, version};
 use std::path::PathBuf;
-use log::info;
 
 pub fn get_exe_path(
     games_dir: &str,
@@ -12,10 +12,11 @@ pub fn get_exe_path(
     version: &str,
 ) -> PathBuf {
     PathBuf::new()
+        .join("drops")
         .join(games_dir)
         .join(game_name_id)
-        .join(&channel_name)
-        .join(&version)
+        .join(channel_name)
+        .join(version)
 }
 
 pub fn newest_release_by_state(

@@ -1,7 +1,9 @@
+use crate::client_config::SessionToken;
 use crate::errors::LoginError::{APIError, BadCredentials, MissingSessionToken};
 use crate::errors::{FetchGamesError, LoginError};
-use crate::{utils, SessionToken};
+use crate::utils;
 use drops_messages::requests::{GetGamesRequest, GetGamesResponse};
+use log::info;
 use reqwest::redirect::Policy;
 use reqwest::{Client, ClientBuilder, StatusCode};
 use std::error;
@@ -10,7 +12,6 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use std::time::Duration;
-use log::info;
 use zip::ZipArchive;
 
 #[derive(Debug, Clone)]
@@ -66,7 +67,7 @@ pub async fn fetch_games(
     let resp = client
         .get(url)
         .json(&req)
-        .header("Cookie", session_token.0)
+        .header("Cookie", session_token.to_string())
         .timeout(Duration::from_secs(5))
         .send()
         .await?;
