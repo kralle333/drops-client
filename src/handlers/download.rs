@@ -12,14 +12,16 @@ use iced_futures::stream::try_channel;
 use iced_futures::Subscription;
 use log::{error, info};
 use std::fs;
-use std::fs::File;
-use std::io::{Cursor, Write};
+use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
 use zip::ZipArchive;
 
 #[cfg(windows)]
 use anyhow::Context;
+
+#[cfg(unix)]
+use std::io::Write;
 
 #[derive(Debug, Clone)]
 pub enum DownloadError {
@@ -210,7 +212,7 @@ Type=Application
 Categories=Game;"#,
             game_name, game_name_id
         );
-        let mut desktop_entry = File::create(&file_path)?;
+        let mut desktop_entry = std::fs::File::create(&file_path)?;
         desktop_entry.write_all(content.as_bytes())?;
 
         Ok(file_path)
