@@ -15,7 +15,7 @@ fn download_newer_version_and_replace(
     // get the first available release
     let asset = release.asset_for(default_platform(), None).unwrap();
 
-    //println!("creating temp dirs");
+    //info!("creating temp dirs");
     let cur_dir = env::current_dir().context("getting cur dir")?;
     let tmp_dir = tempfile::Builder::new()
         .prefix("self_update")
@@ -24,7 +24,7 @@ fn download_newer_version_and_replace(
     let tmp_zip_path = tmp_dir.path().join(&asset.name);
     let tmp_zip = std::fs::File::create(&tmp_zip_path).context("opening zip file")?;
 
-    //println!("downloading");
+    //info!("downloading");
     self_update::Download::from_url(&asset.download_url)
         .set_header(reqwest::header::ACCEPT, "application/octet-stream".parse()?)
         .download_to(&tmp_zip)?;
@@ -33,13 +33,13 @@ fn download_newer_version_and_replace(
         "windows" => ".exe",
         _ => "",
     };
-    //println!("updating!");
+    //info!("updating!");
     let bin_name = std::path::PathBuf::from(format!("drops-client{}", bin_name_suffix));
-    //println!("using binname: {}", bin_name.to_str().unwrap_or(""));
+    //info!("using binname: {}", bin_name.to_str().unwrap_or(""));
     self_update::Extract::from_source(&tmp_zip_path)
         .archive(self_update::ArchiveKind::Zip)
         .extract_file(tmp_dir.path(), &bin_name)?;
-    //println!("replacing!");
+    //info!("replacing!");
 
     let new_exe = tmp_dir.path().join(bin_name);
     self_replace::self_replace(new_exe)?;

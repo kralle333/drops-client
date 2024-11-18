@@ -10,6 +10,7 @@ use std::fs::File;
 use std::io::Cursor;
 use std::path::Path;
 use std::time::Duration;
+use log::info;
 use zip::ZipArchive;
 
 #[derive(Debug, Clone)]
@@ -88,7 +89,7 @@ pub fn unzip_file(
         let mut file = archive.by_index(i)?;
         let outpath = Path::new(output_dir).join(file.name());
 
-        println!("Extracting file: {}", outpath.display());
+        info!("Extracting file: {}", outpath.display());
 
         // Check if the file is a directory or a file
         if file.name().ends_with('/') {

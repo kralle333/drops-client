@@ -44,10 +44,10 @@ impl Blackboard {
         self.selected_game = Some(updated_game);
     }
 
-    pub fn run_release(&mut self, game_name_id: &str, release: &Release) {
+    pub fn run_release(&mut self, game: &Game, release: &Release) {
         let executable_dir = utils::get_exe_path(
             &self.config.get_games_dir(),
-            game_name_id,
+            &game.name_id,
             &release.channel_name,
             &release.version,
         );

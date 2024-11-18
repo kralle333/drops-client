@@ -3,6 +3,7 @@ use anyhow::anyhow;
 use self_update::backends::github;
 use self_update::{cargo_crate_version, version};
 use std::path::PathBuf;
+use log::info;
 
 pub fn get_exe_path(
     games_dir: &str,
@@ -49,8 +50,8 @@ pub fn look_for_newer_version() -> Result<Option<self_update::update::Release>, 
         .repo_name("drops-client")
         .build()?
         .fetch()?;
-    //println!("found releases:");
-    //println!("{:#?}\n", releases);
+    //info!("found releases:");
+    //info!("{:#?}\n", releases);
 
     if releases.is_empty() {
         return Ok(None);
@@ -62,7 +63,7 @@ pub fn look_for_newer_version() -> Result<Option<self_update::update::Release>, 
 
     let current = cargo_crate_version!();
     if version::bump_is_greater(current, &newer_version).map(|x| !x)? {
-        println!("no updates");
+        info!("no updates");
         return Err(anyhow!("no update"));
     }
 

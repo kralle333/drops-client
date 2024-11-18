@@ -1,8 +1,8 @@
 use crate::client_config::{ClientConfig, Game, Release};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
+use crate::handlers::download::{DownloadError, DownloadProgress};
 use crate::{Screen, SessionToken};
 use drops_messages::requests::GetGamesResponse;
-use crate::handlers::download::{DownloadError, DownloadProgress};
 
 #[derive(Debug, Clone)]
 pub enum Message {
@@ -36,4 +36,5 @@ pub enum Message {
     ClearRequestedGameToPlay,
     SelectedVersionChanged(String),
     CloseError,
+    IpcArgs(String),
 }

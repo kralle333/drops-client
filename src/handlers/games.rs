@@ -199,13 +199,8 @@ impl MessageHandler for GamesMessageHandler {
             }
 
             Message::Run(release) => {
-                let game_name_id = &blackboard
-                    .selected_game
-                    .as_ref()
-                    .unwrap()
-                    .name_id
-                    .to_string();
-                blackboard.run_release(game_name_id, &release)
+                let game = blackboard.selected_game.as_ref().unwrap();
+                blackboard.run_release(&game.clone(), &release)
             }
             _ => {
                 error!("Unexpected state!")

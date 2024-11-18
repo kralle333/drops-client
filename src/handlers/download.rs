@@ -5,19 +5,21 @@ use crate::client_config::{ClientConfig, Game, Release};
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
 use crate::{utils, Screen, SessionToken};
-use anyhow::Context;
 use futures_util::{SinkExt, Stream, StreamExt};
 use iced::widget::{button, column, progress_bar, text, vertical_space};
 use iced::{Center, Element, Fill, Task};
 use iced_futures::stream::try_channel;
 use iced_futures::Subscription;
-use log::error;
+use log::{error, info};
 use std::fs;
 use std::fs::File;
 use std::io::{Cursor, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use zip::ZipArchive;
+
+#[cfg(windows)]
+use anyhow::Context;
 
 #[derive(Debug, Clone)]
 pub enum DownloadError {
@@ -79,7 +81,7 @@ impl Download {
             .join(&self.game_name_id)
             .join(&self.channel_name)
             .join(&self.version);
-        println!("Downloading {}", output_dir.display());
+        info!("Downloading {}", output_dir.display());
         let token = self.session_token.0.to_string();
         let release = InstalledRelease {
             game_name_id: self.game_name_id.to_string(),
@@ -183,7 +185,7 @@ impl DownloadMessageHandler {
             mslnk::ShellLink::new(&executable_path).context("failed to create shell link")?;
         sl.set_arguments(Some(game_name_id.to_string()));
         sl.create_lnk(&link_file_path)
-            .map_err(|x| anyhow!("{}", x))?;
+            .map_err(|x| anyhow::anyhow!("{}", x))?;
         Ok(link_file_path)
     }
     #[cfg(unix)]
@@ -323,7 +325,7 @@ impl MessageHandler for DownloadMessageHandler {
 
                     #[cfg(unix)]
                     if let Err(e) = Self::create_linux_desktop_entry(&game.name_id, &game.name) {
-                        println!("failed to create linux desktop entry: {}", e);
+                        info!("failed to create linux desktop entry: {}", e);
                     }
                 }
             },

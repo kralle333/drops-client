@@ -9,7 +9,7 @@ mod tasks;
 mod utils;
 mod view_utils;
 
-use crate::client_config::{ClientConfig, Game, Release, ReleaseState};
+use crate::client_config::{get_config_dir, ClientConfig, Game, Release, ReleaseState};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
 use crate::handlers::client_update::ClientUpdateHandler;
 use crate::handlers::download::DownloadMessageHandler;
@@ -18,16 +18,24 @@ use crate::handlers::login::LoginMessageHandler;
 use crate::handlers::wizard::WizardMessageHandler;
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
+use anyhow::anyhow;
 use blackboard::Blackboard;
 use env_logger::Env;
+use fs2::FileExt;
+use futures_util::SinkExt;
+use iced::futures::Stream;
 use iced::widget::{button, column, row, text, vertical_space};
 use iced::{window, Center, Element, Size, Task};
-use iced_futures::Subscription;
+use iced_futures::{stream, Subscription};
+use ipc_channel::ipc::{IpcOneShotServer, IpcSender};
 use log::{error, info};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use std::default::Default;
-use std::env;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::{env, fs};
 
 #[derive(Default)]
 struct DropsClient {
@@ -52,6 +60,7 @@ pub enum Screen {
     Downloading,
     Main,
     Error(String),
+    PlayingGame(String),
 }
 
 #[derive(Default)]
@@ -104,7 +113,47 @@ impl DropsClient {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        self.downloading.subscription()
+        Subscription::batch([
+            Subscription::run_with_id("ipc", Self::handle_other_clients_opening()),
+            self.downloading.subscription(),
+        ])
+    }
+
+    fn handle_other_clients_opening() -> impl Stream<Item = Message> {
+        stream::channel(1, |mut output| async move {
+            let mut lock_file = LockFileWithDrop::new();
+            loop {
+                let result = IpcOneShotServer::new();
+
+                let Ok((server, server_name)) = result else {
+                    info!(
+                        "failed to create oneshot server: {}",
+                        result.err().unwrap().to_string()
+                    );
+                    return;
+                };
+
+                info!("created server");
+                let msg = lock_file.write_server_name_lock(&server_name);
+                if msg.is_err() {
+                    info!(
+                        "Failed to write server name {}: {:?}",
+                        server_name,
+                        msg.err()
+                    )
+                }
+
+                info!("lets accept the server!");
+                let result = tokio::task::spawn_blocking(move || server.accept()).await;
+                if let Ok((_, message)) = result.unwrap() {
+                    info!("Received message: {}", message);
+                    output
+                        .send(Message::IpcArgs(message))
+                        .await
+                        .expect("failed to send args");
+                }
+            }
+        })
     }
 
     fn have_valid_config(&self) -> bool {
@@ -118,6 +167,9 @@ impl DropsClient {
             Screen::Login | Screen::LoggingIn => self.login.view(&self.blackboard),
             Screen::Downloading => self.downloading.view(&self.blackboard),
             Screen::ClientUpdateAvailable(_) => self.client_updating.view(&self.blackboard),
+            Screen::PlayingGame(name) => {
+                view_utils::centered_container(text(format!("Playing {}", name)).into())
+            }
             Screen::Main => {
                 match &self.run_from_args_issue {
                     RunFromArgsIssue::Error(_) | RunFromArgsIssue::FoundUpdate(..) => {
@@ -171,6 +223,16 @@ impl DropsClient {
         }
     }
 
+    fn try_run_from_args(&mut self) {
+        self.run_from_args_issue = self.handle_args_game_running();
+        if let RunFromArgsIssue::CanPlay(release) = &self.run_from_args_issue {
+            let game_name_id = self.requested_game_to_play.as_ref().unwrap();
+            let games = self.blackboard.config.get_account_games();
+            let game = games.iter().find(|x| &x.name_id == game_name_id).unwrap();
+            self.blackboard.run_release(game, &release);
+            self.run_from_args_issue = RunFromArgsIssue::NotSet;
+        }
+    }
     fn handle_args_game_running(&mut self) -> RunFromArgsIssue {
         let Some(game_name_id) = &self.requested_game_to_play else {
             return RunFromArgsIssue::NotSet;
@@ -231,6 +293,10 @@ impl DropsClient {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
+            Message::IpcArgs(args) => {
+                self.requested_game_to_play = Some(args);
+                self.try_run_from_args();
+            }
             Message::CloseError => self.blackboard.screen = Screen::Main,
             Message::UpdateClient(_) => {
                 return self.client_updating.update(message, &mut self.blackboard)
@@ -287,7 +353,7 @@ impl DropsClient {
                 match e {
                     FetchGamesError::APIError(ref inner)
                     | FetchGamesError::Unreachable(ref inner) => {
-                        println!("api error: {}", &inner)
+                        info!("api error: {}", &inner)
                     }
                     FetchGamesError::NotFound => {}
                     FetchGamesError::NeedRelogin | FetchGamesError::BadCredentials => {
@@ -302,13 +368,7 @@ impl DropsClient {
                     .config
                     .sync_and_save(games_response)
                     .expect("Failed to receive games response");
-
-                self.run_from_args_issue = self.handle_args_game_running();
-                if let RunFromArgsIssue::CanPlay(release) = &self.run_from_args_issue {
-                    self.blackboard
-                        .run_release(&self.requested_game_to_play.as_ref().unwrap(), &release);
-                    self.run_from_args_issue = RunFromArgsIssue::NotSet;
-                }
+                self.try_run_from_args();
             }
 
             Message::SelectedChannelChanged(channel_name) => {
@@ -327,7 +387,7 @@ impl DropsClient {
                 ConfigError::DialogClosed => "Dialog closed".to_string(),
                 ConfigError::IoError(e) => format!("io error: {}", e).to_string(),
             };
-            println!("failed to open config, recreating {}", error_message);
+            info!("failed to open config, recreating {}", error_message);
             ClientConfig {
                 active_account: Default::default(),
                 accounts: vec![],
@@ -367,9 +427,84 @@ impl DropsClient {
     }
 }
 
-fn main() -> iced::Result {
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+struct LockFileWithDrop {
+    pub lock_file: File,
+    path: PathBuf,
+}
 
+impl LockFileWithDrop {
+    fn new() -> Box<Self> {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(Self::lock_file_path())
+            .expect("Failed to open or create lock file.");
+
+        Box::new(Self {
+            lock_file: file,
+            path: Self::lock_file_path(),
+        })
+    }
+    fn write_server_name_lock(&mut self, name: &str) -> Result<(), anyhow::Error> {
+        info!("Writing server name to file: {}", name);
+        self.lock_file.unlock()?;
+        self.lock_file.write_all(name.as_bytes())?;
+        self.lock_file.try_lock_exclusive()?;
+        info!("Success!");
+        Ok(())
+    }
+
+    fn lock_file_path() -> PathBuf {
+        get_config_dir().join("drops.lock")
+    }
+}
+
+impl Drop for LockFileWithDrop {
+    fn drop(&mut self) {
+        let unlock_result = self.lock_file.unlock();
+        if unlock_result.is_err() {
+            error!("Failed to unlock lock file")
+        }
+        fs::remove_file(&self.path).expect("Failed to delete lock file")
+    }
+}
+
+fn main() -> Result<(), anyhow::Error> {
+    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    {
+        /* TODO: Race condition: there is a gap between here
+        and the next lock where potentially multiple clients can spawn */
+        let mut lock_file = LockFileWithDrop::new();
+
+        if lock_file.lock_file.try_lock_exclusive().is_err() {
+            let args: Vec<String> = env::args().skip(1).collect();
+            if args.len() > 1 {
+                return Err(anyhow!("invalid number of arguments!"));
+            }
+            // no arguments, just ignore
+            if args.len() != 1 {
+                return Ok(());
+            }
+            // let's send this argument to the running instance
+            if let Some(arg) = args.iter().nth(0) {
+                let mut server_name = String::new();
+                let _ = lock_file.lock_file.read_to_string(&mut server_name);
+                if let Ok(sender) = IpcSender::<String>::connect(server_name) {
+                    sender
+                        .send(arg.to_string())
+                        .expect("Failed to send arguments.");
+                    info!("Arguments sent successfully.");
+                } else {
+                    info!("Failed to connect to the running instance.");
+                }
+            }
+
+            return Ok(());
+        }
+    }
+
+    info!("No running instance found. Starting a new one...");
     let settings = window::settings::Settings {
         size: Size {
             width: 600.0,
@@ -386,4 +521,5 @@ fn main() -> iced::Result {
         .subscription(DropsClient::subscription)
         .centered()
         .run_with(DropsClient::new)
+        .map_err(|x| anyhow::anyhow!(x))
 }
