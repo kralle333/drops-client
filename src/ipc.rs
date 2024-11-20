@@ -5,8 +5,6 @@ use fs2::FileExt;
 use futures_util::SinkExt;
 use iced::futures::Stream;
 use iced_futures::{stream, Subscription};
-#[cfg(windows)]
-use interprocess::os::windows::local_socket::NamedPipe;
 use ipmb::{label, RecvError};
 use log::{debug, error, info, warn};
 use std::fs::{File, OpenOptions};

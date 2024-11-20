@@ -10,7 +10,7 @@ use iced::widget::{button, column, progress_bar, text, vertical_space};
 use iced::{Center, Element, Fill, Task};
 use iced_futures::stream::try_channel;
 use iced_futures::Subscription;
-use log::{error, info};
+use log::error;
 use std::fs;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -364,7 +364,7 @@ impl MessageHandler for DownloadMessageHandler {
 
                     #[cfg(unix)]
                     if let Err(e) = Self::create_linux_desktop_entry(&game.name_id, &game.name) {
-                        info!("failed to create linux desktop entry: {}", e);
+                        error!("failed to create linux desktop entry: {}", e);
                     }
                 }
             },
