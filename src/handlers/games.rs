@@ -1,9 +1,10 @@
 use crate::blackboard::Blackboard;
 use crate::client_config::ReleaseState;
+use crate::handlers::download::DownloadRequest;
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
 use crate::{utils, view_utils};
-use iced::widget::{button, column, text, vertical_space, Button};
+use iced::widget::{button, column, text, vertical_space};
 use iced::widget::{pick_list, row, scrollable, Container};
 use iced::{Center, Element, Fill, Task};
 use log::error;
@@ -11,6 +12,13 @@ use std::collections::HashSet;
 
 #[derive(Default)]
 pub struct GamesMessageHandler;
+
+enum OptionButtonTypes {
+    Play,
+    Fetch,
+    Update,
+    Install,
+}
 
 impl GamesMessageHandler {
     pub fn view<'a>(&self, blackboard: &'a Blackboard) -> Element<'a, Message> {
@@ -52,30 +60,50 @@ impl GamesMessageHandler {
                 let latest_release =
                     utils::newest_release_by_state(&game.releases, Some(channel), None);
 
-                let option_button = match newest_installed {
+                let option_button_type = match newest_installed {
                     None => match latest_release {
-                        None => {
-                            button(text("Fetch releases").center()).on_press(Message::FetchGames)
-                        }
-                        Some(latest) => button(text("Install").center())
-                            .on_press(Message::Download(game.clone(), latest.clone())),
+                        None => OptionButtonTypes::Fetch,
+                        Some(_) => OptionButtonTypes::Install,
                     },
-                    Some(release) => {
-                        let play_button: Button<Message> =
-                            button(text("Play").center()).on_press(Message::Run(release.clone()));
-                        if let Some(latest) = latest_release {
-                            if &latest.version != &release.version {
-                                button(text("Update").center())
-                                    .on_press(Message::Download(game.clone(), latest.clone()))
-                            } else {
-                                play_button
-                            }
-                        } else {
-                            play_button
+                    Some(ref release) => match latest_release {
+                        None => OptionButtonTypes::Play,
+                        Some(ref latest) if latest.version == release.version => {
+                            OptionButtonTypes::Play
                         }
-                    }
-                }
-                .width(75);
+                        Some(_) => OptionButtonTypes::Update,
+                    },
+                };
+
+                let mk_btn = |name, msg| button(text(name).center()).on_press(msg);
+
+                let option_button = match option_button_type {
+                    OptionButtonTypes::Play => mk_btn(
+                        "Play",
+                        Message::Run(newest_installed.as_ref().unwrap().clone()),
+                    ),
+                    OptionButtonTypes::Fetch => mk_btn("Fetch releases", Message::FetchGames),
+                    OptionButtonTypes::Update => mk_btn(
+                        "Update",
+                        Message::Download(DownloadRequest::build(
+                            &latest_release.as_ref().unwrap(),
+                            game,
+                            &blackboard.config,
+                        )),
+                    ),
+                    OptionButtonTypes::Install => mk_btn(
+                        "Install",
+                        Message::Download(DownloadRequest::build(
+                            &latest_release.as_ref().unwrap(),
+                            game,
+                            &blackboard.config,
+                        )),
+                    ),
+                };
+                let option_button = match option_button_type {
+                    OptionButtonTypes::Play => Some(option_button),
+                    _ if game.orphaned => None,
+                    _ => Some(option_button),
+                };
 
                 let (versions, channels) = game.releases.iter().fold(
                     (HashSet::new(), HashSet::new()),
@@ -126,7 +154,7 @@ impl GamesMessageHandler {
                 );
 
                 let buttons = row![]
-                    .push(option_button)
+                    .push_maybe(option_button)
                     .push_maybe(dropdown_picker)
                     .push_maybe(installed_versions_picker)
                     .padding(10)

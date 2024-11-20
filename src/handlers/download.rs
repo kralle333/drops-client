@@ -4,7 +4,7 @@ use crate::client_config::ReleaseState::Installed;
 use crate::client_config::{ClientConfig, Game, Release, SessionToken};
 use crate::handlers::MessageHandler;
 use crate::messages::Message;
-use crate::{utils, Screen};
+use crate::{utils, view_utils, Screen};
 use futures_util::{SinkExt, Stream, StreamExt};
 use iced::widget::{button, column, progress_bar, text, vertical_space};
 use iced::{Center, Element, Fill, Task};
@@ -24,9 +24,35 @@ use anyhow::Context;
 use std::io::Write;
 
 #[derive(Debug, Clone)]
+pub struct DownloadRequest {
+    name_id: String,
+    game_dir: String,
+    drops_url: String,
+    session_token: SessionToken,
+    version: String,
+    channel_name: String,
+    size_bytes: u64,
+}
+
+impl DownloadRequest {
+    pub fn build(release: &Release, game: &Game, config: &ClientConfig) -> DownloadRequest {
+        DownloadRequest {
+            name_id: game.name_id.to_string(),
+            game_dir: config.get_games_dir(),
+            drops_url: config.get_drops_url(),
+            session_token: config.get_session_token(),
+            version: release.version.to_string(),
+            channel_name: release.channel_name.to_string(),
+            size_bytes: release.size_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum DownloadError {
     RequestFailed(Arc<reqwest::Error>),
-    IoError,
+    EmptyResponse,
+    IoError(String),
 }
 impl From<reqwest::Error> for DownloadError {
     fn from(error: reqwest::Error) -> Self {
@@ -53,18 +79,18 @@ pub struct Download {
 }
 
 impl Download {
-    pub fn new(release: &Release, game: &Game, config: &ClientConfig) -> Self {
+    pub fn new(request: &DownloadRequest) -> Self {
         Self {
-            game_name_id: game.name_id.to_string(),
-            game_dir: config.get_games_dir(),
-            url: config.get_drops_url(),
-            session_token: config.get_session_token(),
-            version: release.version.to_string(),
-            channel_name: release.channel_name.to_string(),
+            game_name_id: request.name_id.to_string(),
+            game_dir: request.game_dir.to_string(),
+            url: request.drops_url.to_string(),
+            session_token: request.session_token.clone(),
+            version: request.version.to_string(),
+            channel_name: request.channel_name.to_string(),
             state: DownloadState::Downloading {
                 progress_percentage: 0.0,
             },
-            size_bytes: release.size_bytes,
+            size_bytes: request.size_bytes,
         }
     }
 
@@ -83,7 +109,6 @@ impl Download {
             .join(&self.game_name_id)
             .join(&self.channel_name)
             .join(&self.version);
-        info!("Downloading {}", output_dir.display());
         let token = self.session_token.to_string();
         let release = InstalledRelease {
             game_name_id: self.game_name_id.to_string(),
@@ -109,21 +134,22 @@ impl Download {
                 let percent = 100.0 * (downloaded as f32 / total as f32);
                 let _ = output.send(DownloadProgress::Downloading { percent }).await;
             }
+            if downloaded == 0 {
+                return Err(DownloadError::EmptyResponse);
+            }
 
             let reader = Cursor::new(zip_data);
-            let mut zip = ZipArchive::new(reader).map_err(|_| DownloadError::IoError)?;
+            let mut zip =
+                ZipArchive::new(reader).map_err(|e| DownloadError::IoError(e.to_string()))?;
 
             fs::create_dir_all(&output_dir).expect("failed creating unzip folder");
             let output_dir = output_dir.as_path().to_str().unwrap();
-            unzip_file(&mut zip, output_dir).map_err(|e| {
-                error!("Failed to unzip file: {}", e);
-                DownloadError::IoError
-            })?;
+            unzip_file(&mut zip, output_dir).map_err(|e| DownloadError::IoError(e.to_string()))?;
 
             output
                 .send(DownloadProgress::Finished { release })
                 .await
-                .map_err(|_| DownloadError::IoError)?;
+                .map_err(|e| DownloadError::IoError(e.to_string()))?;
 
             Ok(())
         })
@@ -248,23 +274,32 @@ Categories=Game;"#,
                 progress_bar(0.0..=100.0, progress.clone()).width(200)
             ]
             .align_x(Center)
-            .width(Fill),
+            .width(Fill)
+            .into(),
             DownloadState::Errored(reason) => {
                 let reason_str = match reason {
+                    DownloadError::EmptyResponse => {
+                        "received empty response from server".to_string()
+                    }
                     DownloadError::RequestFailed(e) => format!("request error:  {}", e),
-                    DownloadError::IoError => "io error".to_string(),
+                    DownloadError::IoError(reason) => format!("IO error:  {}", reason),
                 };
                 let game_name_id = displayed_download.game_name_id.to_string();
-                column![
-                    text(format!(
-                        "Failed to download release with error: {}",
-                        reason_str
-                    )),
-                    button(text("Ok").center()).on_press(Message::CloseDownloadError(game_name_id))
-                ]
+                view_utils::centered_container(
+                    column![
+                        text(format!(
+                            "Failed to download release with error: {}",
+                            reason_str
+                        )),
+                        button(text("Ok").center())
+                            .on_press(Message::CloseDownloadError(game_name_id))
+                    ]
+                    .align_x(Center)
+                    .width(300)
+                    .into(),
+                )
             }
         }
-        .into()
     }
     pub(crate) fn subscription(&self) -> Subscription<Message> {
         Subscription::batch(self.downloads.iter().map(Download::subscription))
@@ -274,9 +309,8 @@ Categories=Game;"#,
 impl MessageHandler for DownloadMessageHandler {
     fn update(&mut self, message: Message, blackboard: &mut Blackboard) -> Task<Message> {
         match message {
-            Message::Download(game, release) => {
-                self.downloads
-                    .push(Download::new(&release, &game, &blackboard.config));
+            Message::Download(request) => {
+                self.downloads.push(Download::new(&request));
                 blackboard.screen = Screen::Downloading;
             }
             Message::DownloadProgressing((id, Ok(progress))) => match progress {
@@ -343,6 +377,7 @@ impl MessageHandler for DownloadMessageHandler {
             }
             Message::CloseDownloadError(id) => {
                 self.downloads.retain(|x| x.game_name_id != id);
+                blackboard.screen = Screen::Main;
             }
             _ => {
                 error!("invalid download state!")

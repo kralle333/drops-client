@@ -13,13 +13,14 @@ mod view_utils;
 use crate::client_config::{ClientConfig, Game, Release, ReleaseState};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
 use crate::handlers::client_update::ClientUpdateHandler;
-use crate::handlers::download::DownloadMessageHandler;
+use crate::handlers::download::{DownloadMessageHandler, DownloadRequest};
 use crate::handlers::games::GamesMessageHandler;
 use crate::handlers::login::LoginMessageHandler;
 use crate::handlers::wizard::WizardMessageHandler;
 use crate::handlers::MessageHandler;
 use crate::ipc::{Event, LockFileWithDrop};
 use crate::messages::Message;
+use anyhow::anyhow;
 use blackboard::Blackboard;
 use env_logger::Env;
 use iced::widget::{button, column, row, text, vertical_space};
@@ -29,7 +30,7 @@ use log::{error, info};
 use secrecy::SecretString;
 use std::default::Default;
 use std::env;
-use sysinfo::{Pid, System};
+use sysinfo::System;
 
 #[derive(Default)]
 struct DropsClient {
@@ -112,7 +113,7 @@ impl DropsClient {
             Screen::Main => {
                 match &self.run_from_args_issue {
                     RunFromArgsIssue::Error(_) | RunFromArgsIssue::FoundUpdate(..) => {
-                        return Self::display_run_from_args_issue(&self.run_from_args_issue);
+                        return self.display_run_from_args_issue();
                     }
                     _ => {}
                 }
@@ -130,8 +131,8 @@ impl DropsClient {
         }
     }
 
-    fn display_run_from_args_issue(issue: &RunFromArgsIssue) -> Element<Message> {
-        match issue {
+    fn display_run_from_args_issue(&self) -> Element<Message> {
+        match &self.run_from_args_issue {
             RunFromArgsIssue::Error(message) => view_utils::centered_container(
                 column![]
                     .align_x(Center)
@@ -145,10 +146,9 @@ impl DropsClient {
                     "Found newer release, update?".to_string(),
                     column![].push(
                         row![]
-                            .push(
-                                button(text("update"))
-                                    .on_press(Message::Download(game.clone(), new_release.clone())),
-                            )
+                            .push(button(text("update")).on_press(Message::Download(
+                                DownloadRequest::build(new_release, game, &self.blackboard.config),
+                            )))
                             .push(
                                 button(text("play"))
                                     .on_press(Message::Run(installed_release.clone())),
@@ -168,6 +168,8 @@ impl DropsClient {
             let game_name_id = self.requested_game_to_play.as_ref().unwrap();
             let games = self.blackboard.config.get_account_games();
             let game = games.iter().find(|x| &x.name_id == game_name_id).unwrap();
+            let set_version = release.version.to_string();
+            self.blackboard.selected_version = Some(set_version);
             self.blackboard.run_release(game, &release);
             self.run_from_args_issue = RunFromArgsIssue::NotSet;
             self.requested_game_to_play = None;
@@ -315,6 +317,12 @@ impl DropsClient {
             }
 
             Message::SelectedChannelChanged(channel_name) => {
+                let newest = utils::newest_release_by_state(
+                    &self.blackboard.selected_game.as_ref().unwrap().releases,
+                    Some(&channel_name),
+                    None,
+                );
+                self.blackboard.selected_version = newest.and_then(|x| Some(x.version));
                 self.blackboard.selected_channel = Some(channel_name);
             }
             Message::SelectedVersionChanged(version) => {
@@ -367,22 +375,24 @@ impl DropsClient {
     }
 }
 
-fn is_process_running(pid: Pid) -> bool {
-    let mut system = System::new_all();
-    system.refresh_all();
-
-    // Check if the process exists in the list of processes
-    system.process(pid).is_some()
-}
-
 fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
     if let Some(pid) = LockFileWithDrop::read_lock() {
-        if is_process_running(pid) {
-            return Ok(());
-            // info!("sending args to running client");
-            //return ipc::try_send_args();
+        match System::new_all().process(pid) {
+            None => {
+                info!("found lock, but no process with that id running, deleting lock file");
+            }
+            Some(p) => {
+                let args: Vec<String> = env::args().skip(1).collect();
+                if args.len() > 1 {
+                    return Err(anyhow!("invalid number of arguments!"));
+                }
+                if let Some(game_name_id) = args.get(0) {
+                    info!("new client was started with game_name_id arg: {}, killing old client process",game_name_id);
+                    p.kill();
+                }
+            }
         }
     }
 

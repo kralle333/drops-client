@@ -1,6 +1,6 @@
 use crate::client_config::{ClientConfig, Game, Release, SessionToken};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
-use crate::handlers::download::{DownloadError, DownloadProgress};
+use crate::handlers::download::{DownloadError, DownloadProgress, DownloadRequest};
 use crate::ipc::Event;
 use crate::Screen;
 use drops_messages::requests::GetGamesResponse;
@@ -15,7 +15,7 @@ pub enum Message {
 
     SelectGame(Game),
     Run(Release),
-    Download(Game, Release),
+    Download(DownloadRequest),
 
     UsernameChanged(String),
     PasswordChanged(String),
