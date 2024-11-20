@@ -29,7 +29,7 @@ pub fn newest_release_by_state(
         .filter(|x| channel.map_or(true, |c| x.channel_name == c))
         .filter(|x| state.as_ref().map_or(true, |s| &x.state == s))
         .max_by(|x, y| x.release_date.cmp(&y.release_date))
-        .map(|x| x.clone())
+        .cloned()
 }
 
 pub fn default_platform() -> &'static str {

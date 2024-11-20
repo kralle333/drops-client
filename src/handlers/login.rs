@@ -63,7 +63,7 @@ impl LoginMessageHandler {
             .size(15)
             .width(250);
         let password_input =
-            iced::widget::text_input("Password", &self.password_input.expose_secret())
+            iced::widget::text_input("Password", self.password_input.expose_secret())
                 .on_input(Message::PasswordChanged)
                 .secure(true)
                 .padding(10)
@@ -84,7 +84,7 @@ impl LoginMessageHandler {
             .push_maybe(
                 self.error_reason
                     .clone()
-                    .map(|x| text(format!("{}", x)).color(Color::from_rgb(0.8, 0.4, 0.4))),
+                    .map(|x| text(x).color(Color::from_rgb(0.8, 0.4, 0.4))),
             )
             .push(server_select)
             .push(username_input)
@@ -115,7 +115,7 @@ impl MessageHandler for LoginMessageHandler {
                 return tasks::perform_login(
                     &url,
                     &self.username_input,
-                    &self.password_input.expose_secret(),
+                    self.password_input.expose_secret(),
                 );
             }
 

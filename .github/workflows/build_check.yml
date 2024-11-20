@@ -1,0 +1,16 @@
+name: Build and check
+on:
+  push:
+
+jobs:
+  check-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+      - name: Set up Rust
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Check
+        run: cargo check
+      - name: Build
+        run: cargo build --release

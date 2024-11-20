@@ -133,7 +133,7 @@ impl GamesMessageHandler {
                     .spacing(20)
                     .width(300);
 
-                let mut versions: Vec<(String, String)> = versions.into_iter().map(|x| x).collect();
+                let mut versions: Vec<(String, String)> = versions.into_iter().collect();
                 versions.sort_by(|(_, x), (_, y)| y.cmp(x));
 
                 let versions = versions
@@ -172,7 +172,7 @@ impl GamesMessageHandler {
                 Container::new(column![c, scrollable(versions).width(400)])
             }
         };
-        view_utils::container_with_top_bar_and_side_view(content, blackboard).into()
+        view_utils::container_with_top_bar_and_side_view(content, blackboard)
     }
 }
 
@@ -188,7 +188,7 @@ impl MessageHandler for GamesMessageHandler {
                 let mut versions_installed: Vec<String> = game
                     .releases
                     .iter()
-                    .filter(|x| &x.channel_name == &selected_channel)
+                    .filter(|x| x.channel_name == selected_channel)
                     .filter(|x| x.state == ReleaseState::Installed)
                     .map(|x| x.version.to_string())
                     .collect();

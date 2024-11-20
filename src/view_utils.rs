@@ -35,9 +35,9 @@ pub fn container_with_title(title: String, content: Column<Message>) -> Element<
         .into()
 }
 
-pub fn container_with_top_bar_and_side_view<'a, 'b>(
+pub fn container_with_top_bar_and_side_view<'a>(
     content: Container<'a, Message>,
-    blackboard: &'b Blackboard,
+    blackboard: &Blackboard,
 ) -> Element<'a, Message> {
     let config = &blackboard.config;
     let header = container(

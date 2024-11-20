@@ -28,7 +28,6 @@ impl WizardMessageHandler {
     }
     pub fn view(&self, blackboard: &Blackboard) -> Element<Message> {
         view_utils::container_with_title("Welcome".to_string(), self.wizard_column(blackboard))
-            .into()
     }
     fn wizard_column(&self, blackboard: &Blackboard) -> Column<Message> {
         let host_input = text_input("drops server url", &self.drops_url_input)

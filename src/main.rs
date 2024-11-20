@@ -10,7 +10,7 @@ mod tasks;
 mod utils;
 mod view_utils;
 
-use crate::client_config::{get_config_dir, ClientConfig, Game, Release, ReleaseState};
+use crate::client_config::{ClientConfig, Game, Release, ReleaseState};
 use crate::errors::{ConfigError, FetchGamesError, LoginError};
 use crate::handlers::client_update::ClientUpdateHandler;
 use crate::handlers::download::DownloadMessageHandler;
@@ -18,20 +18,18 @@ use crate::handlers::games::GamesMessageHandler;
 use crate::handlers::login::LoginMessageHandler;
 use crate::handlers::wizard::WizardMessageHandler;
 use crate::handlers::MessageHandler;
+use crate::ipc::{Event, LockFileWithDrop};
 use crate::messages::Message;
 use blackboard::Blackboard;
 use env_logger::Env;
-use fs2::FileExt;
 use iced::widget::{button, column, row, text, vertical_space};
 use iced::{window, Center, Element, Size, Task};
 use iced_futures::Subscription;
 use log::{error, info};
 use secrecy::SecretString;
 use std::default::Default;
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
-use std::path::PathBuf;
-use std::{env, fs};
+use std::env;
+use sysinfo::{Pid, System};
 
 #[derive(Default)]
 struct DropsClient {
@@ -172,6 +170,7 @@ impl DropsClient {
             let game = games.iter().find(|x| &x.name_id == game_name_id).unwrap();
             self.blackboard.run_release(game, &release);
             self.run_from_args_issue = RunFromArgsIssue::NotSet;
+            self.requested_game_to_play = None;
         }
     }
     fn handle_args_game_running(&mut self) -> RunFromArgsIssue {
@@ -214,7 +213,7 @@ impl DropsClient {
         if release.is_none() {
             return RunFromArgsIssue::Error(format!(
                 "Found no installed releases for game {}, download one",
-                game.name.to_string()
+                game.name
             ));
         }
         let installed_latest_release = release.unwrap();
@@ -234,10 +233,13 @@ impl DropsClient {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::IpcArgs(args) => {
-                self.requested_game_to_play = Some(args);
-                self.try_run_from_args();
-            }
+            Message::Ipc(event) => match event {
+                Event::ArgsReceived(args) => {
+                    self.requested_game_to_play = Some(args);
+                    self.try_run_from_args();
+                }
+                Event::Yield => {}
+            },
             Message::CloseError => self.blackboard.screen = Screen::Main,
             Message::UpdateClient(_) => {
                 return self.client_updating.update(message, &mut self.blackboard)
@@ -341,11 +343,8 @@ impl DropsClient {
         }
         self.blackboard.set_initial_screen();
 
-        match utils::look_for_newer_version() {
-            Ok(Some(newer_version)) => {
-                self.blackboard.screen = Screen::ClientUpdateAvailable(newer_version);
-            }
-            Ok(_) | Err(_) => {}
+        if let Ok(Some(newer_version)) = utils::look_for_newer_version() {
+            self.blackboard.screen = Screen::ClientUpdateAvailable(newer_version);
         }
 
         if self.have_valid_config() && self.blackboard.config.has_session_token() {
@@ -368,68 +367,27 @@ impl DropsClient {
     }
 }
 
-struct LockFileWithDrop {
-    pub lock_file: File,
-    path: PathBuf,
-}
+fn is_process_running(pid: Pid) -> bool {
+    let mut system = System::new_all();
+    system.refresh_all();
 
-impl LockFileWithDrop {
-    fn new() -> Box<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(Self::lock_file_path())
-            .expect("Failed to open or create lock file.");
-
-        file.lock_exclusive().expect("Failed to lock lock file.");
-        Box::new(Self {
-            lock_file: file,
-            path: Self::lock_file_path(),
-        })
-    }
-
-    pub fn has_lock() -> bool {
-        Self::lock_file_path().exists()
-    }
-
-    pub fn get_server_name() -> String {
-        let mut server_name = String::new();
-        let _ = File::open(Self::lock_file_path())
-            .unwrap()
-            .read_to_string(&mut server_name);
-        server_name
-    }
-
-    fn write_server_name_lock(&mut self, name: &str) -> Result<(), anyhow::Error> {
-        info!("Writing server name to file: {}", name);
-        self.lock_file.unlock()?;
-        self.lock_file.write_all(name.as_bytes())?;
-        self.lock_file.try_lock_exclusive()?;
-        info!("Success!");
-        Ok(())
-    }
-
-    fn lock_file_path() -> PathBuf {
-        get_config_dir().join("drops.lock")
-    }
-}
-
-impl Drop for LockFileWithDrop {
-    fn drop(&mut self) {
-        let unlock_result = self.lock_file.unlock();
-        if unlock_result.is_err() {
-            error!("Failed to unlock lock file")
-        }
-        fs::remove_file(&self.path).expect("Failed to delete lock file")
-    }
+    // Check if the process exists in the list of processes
+    system.process(pid).is_some()
 }
 
 fn main() -> Result<(), anyhow::Error> {
     env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
 
-    if LockFileWithDrop::has_lock() {
-        return ipc::try_send_args();
+    if let Some(pid) = LockFileWithDrop::read_lock() {
+        if is_process_running(pid) {
+            info!("sending args to running client");
+            return ipc::try_send_args();
+        }
+    }
+
+    let file = LockFileWithDrop::new();
+    if let Err(e) = file {
+        error!("failed to create lock file: {}", e);
     }
 
     info!("No running instance found. Starting a new one...");
@@ -447,6 +405,7 @@ fn main() -> Result<(), anyhow::Error> {
         .window(settings)
         .theme(DropsClient::theme)
         .subscription(DropsClient::subscription)
+        .exit_on_close_request(true)
         .centered()
         .run_with(DropsClient::new)
         .map_err(|x| anyhow::anyhow!(x))

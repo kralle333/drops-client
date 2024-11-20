@@ -29,8 +29,9 @@ opener = "0.7.2"
 strum = "0.26.3"
 self_update = { version = "0.41.0", features = ["archive-zip"] }
 tempfile = "3.13.0"
-ipc-channel = "0.19.0"
 fs2 = "0.4.3"
+ipmb = "0.8.0-20241011"
+sysinfo = "0.32.0"
 
 [target.'cfg(windows)'.dependencies]
 mslnk = "0.1.8"
