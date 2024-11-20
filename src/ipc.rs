@@ -21,6 +21,7 @@ pub struct LockFileWithDrop {
     path: PathBuf,
 }
 
+#[allow(unused)]
 #[derive(Debug, Clone)]
 pub enum Event {
     ArgsReceived(String),
@@ -81,6 +82,7 @@ impl Drop for LockFileWithDrop {
     }
 }
 
+#[allow(unused)]
 fn handle_other_clients_opening() -> impl Stream<Item = Event> {
     stream::channel(1, |mut output| async move {
         let options = ipmb::Options::new("drops-client", label!("server"), "");
@@ -110,6 +112,7 @@ fn handle_other_clients_opening() -> impl Stream<Item = Event> {
     })
 }
 
+#[allow(unused)]
 pub(crate) fn try_send_args() -> Result<(), Error> {
     let args: Vec<String> = env::args().skip(1).collect();
     if args.len() > 1 {
@@ -132,6 +135,7 @@ pub(crate) fn try_send_args() -> Result<(), Error> {
     Ok(())
 }
 
+#[allow(unused)]
 pub(crate) fn subscription() -> Subscription<Message> {
     Subscription::run(handle_other_clients_opening).map(Message::Ipc)
 }

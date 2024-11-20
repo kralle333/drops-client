@@ -21,11 +21,9 @@ jobs:
 
       - name: Check if release exists
         id: check_release
-        env:
-          VERSION: ${{ env.version }}
         run: |
-          if gh release view "v$VERSION" > /dev/null 2>&1; then
-            echo "Release v$VERSION already exists. Skipping."
+          if gh release view "v$version" > /dev/null 2>&1; then
+            echo "Release v$version already exists. Skipping."
             exit 0
           fi
 

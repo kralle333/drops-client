@@ -92,7 +92,7 @@ impl DropsClient {
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::batch([ipc::subscription(), self.downloading.subscription()])
+        Subscription::batch([self.downloading.subscription()])
     }
 
     fn have_valid_config(&self) -> bool {
@@ -380,8 +380,9 @@ fn main() -> Result<(), anyhow::Error> {
 
     if let Some(pid) = LockFileWithDrop::read_lock() {
         if is_process_running(pid) {
-            info!("sending args to running client");
-            return ipc::try_send_args();
+            return Ok(());
+            // info!("sending args to running client");
+            //return ipc::try_send_args();
         }
     }
 
