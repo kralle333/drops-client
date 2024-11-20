@@ -328,6 +328,7 @@ impl DropsClient {
             Message::SelectedVersionChanged(version) => {
                 self.blackboard.selected_version = Some(version);
             }
+            Message::CloseClient => return iced::exit(),
         }
         Task::none()
     }

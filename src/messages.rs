@@ -38,4 +38,5 @@ pub enum Message {
     SelectedVersionChanged(String),
     CloseError,
     Ipc(Event),
+    CloseClient,
 }

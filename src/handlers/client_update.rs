@@ -5,7 +5,7 @@ use crate::utils::default_platform;
 use crate::{view_utils, Screen};
 use anyhow::Context;
 use iced::widget::{button, column, row, text, vertical_space};
-use iced::{Element, Task};
+use iced::{Center, Element, Task};
 use self_update::{cargo_crate_version, self_replace};
 use std::env;
 
@@ -48,48 +48,72 @@ fn download_newer_version_and_replace(
 }
 
 #[derive(Default)]
+enum ClientUpdateState {
+    #[default]
+    HasUpdate,
+    IsUpdating,
+    UpdateError(String),
+    Completed,
+}
+
+#[derive(Default)]
 pub struct ClientUpdateHandler {
-    is_updating: bool,
-    error_string: String,
+    state: ClientUpdateState,
 }
 
 impl ClientUpdateHandler {
     pub fn view(&self, blackboard: &Blackboard) -> Element<Message> {
         match &blackboard.screen {
-            Screen::ClientUpdateAvailable(new_release) => {
-                if self.is_updating {
-                    return view_utils::container_with_title("Updating!".to_string(), column![]);
+            Screen::ClientUpdateAvailable(new_release) => match &self.state {
+                ClientUpdateState::IsUpdating => {
+                    view_utils::container_with_title("Updating!".to_string(), column![])
                 }
-                if !self.error_string.is_empty() {
-                    return view_utils::container_with_title(
-                        "Failed to update".to_string(),
-                        column![button(text("Go to menu").center())],
-                    );
-                }
-                let buttons_row = row![]
-                    .push(
-                        button(text("cancel").size(16).center())
-                            .on_press(Message::GoToInitialScreen),
-                    )
-                    .push(
-                        button(text("update").size(16).center())
-                            .on_press(Message::UpdateClient(new_release.clone())),
-                    )
-                    .spacing(20);
+                ClientUpdateState::UpdateError(e) => view_utils::container_with_title(
+                    "Failed to update".to_string(),
+                    column![
+                        text(e),
+                        vertical_space().height(30),
+                        button(text("Go to menu").center())
+                    ]
+                    .align_x(Center)
+                    .width(300),
+                ),
+                ClientUpdateState::Completed => view_utils::container_with_title(
+                    "Success!".to_string(),
+                    column![
+                        text("Please close and open client."),
+                        vertical_space().height(30),
+                        button(text("close").center()).on_press(Message::CloseClient)
+                    ]
+                    .align_x(Center)
+                    .width(300),
+                ),
+                ClientUpdateState::HasUpdate => {
+                    let buttons_row = row![]
+                        .push(
+                            button(text("cancel").size(16).center())
+                                .on_press(Message::GoToInitialScreen),
+                        )
+                        .push(
+                            button(text("update").size(16).center())
+                                .on_press(Message::UpdateClient(new_release.clone())),
+                        )
+                        .spacing(20);
 
-                let content = column![]
-                    .push(
-                        text(format!(
-                            "{} -> {}",
-                            cargo_crate_version!(),
-                            new_release.version
-                        ))
-                        .size(32),
-                    )
-                    .push(vertical_space().height(30))
-                    .push(buttons_row);
-                view_utils::container_with_title("New version available!".to_string(), content)
-            }
+                    let content = column![]
+                        .push(
+                            text(format!(
+                                "{} -> {}",
+                                cargo_crate_version!(),
+                                new_release.version
+                            ))
+                            .size(32),
+                        )
+                        .push(vertical_space().height(30))
+                        .push(buttons_row);
+                    view_utils::container_with_title("New version available!".to_string(), content)
+                }
+            },
             _ => column![].into(),
         }
     }
@@ -99,13 +123,14 @@ impl MessageHandler for ClientUpdateHandler {
     fn update(&mut self, message: Message, _: &mut Blackboard) -> Task<Message> {
         match message {
             Message::UpdateClient(release) => {
-                self.is_updating = true;
+                self.state = ClientUpdateState::IsUpdating;
                 let result = download_newer_version_and_replace(release);
                 match result {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        self.state = ClientUpdateState::Completed;
+                    }
                     Err(e) => {
-                        self.is_updating = false;
-                        self.error_string = e.to_string();
+                        self.state = ClientUpdateState::UpdateError(e.to_string());
                     }
                 }
                 Task::none()
